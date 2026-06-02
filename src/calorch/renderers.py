@@ -343,8 +343,9 @@ def build_analysis(
 
 
 def _tickers_from_subject(subject: str) -> list[str]:
-    # crude: any 1-5 char all-uppercase token
-    return [t for t in re.findall(r"\b[A-Z]{1,5}\b", subject) if t not in {"CEO", "CFO", "CRO", "CTO", "USA", "EU", "KOL"}]
+    """Extract valid tickers from subject text, excluding false positives."""
+    from calorch.nodes import _tickers
+    return _tickers(subject)
 
 
 # ---------------------------------------------------------------------------

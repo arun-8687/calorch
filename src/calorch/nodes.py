@@ -695,14 +695,58 @@ def _followup_for(ev: Any, cls: ClassificationResult) -> FollowUpItem:
     )
 
 
+# Common false positives — words that look like tickers but aren't.
+# Also includes SEC form codes and common business abbreviations.
+_TICKER_FALSE_POSITIVES = frozenset({
+    # Roles / people
+    "CEO", "CFO", "CRO", "CTO", "CIO", "COO", "CMO", "CPO", "CSO", "CCO",
+    "VP", "SVP", "EVP", "MD", "KOL", "IC",
+    # Geography
+    "USA", "US", "EU", "UK", "APAC", "EMEA", "LATAM", "CHINA", "JAPAN",
+    # Industries / concepts
+    "AI", "ML", "DL", "LLM", "GPU", "CPU", "TPU", "API", "SaaS", "PaaS", "IaaS",
+    "ML", "RAG", "RL", "CV", "NLP", "AGI", "ASI",
+    "EV", "AV", "ADAS", "OEM", "SEMI", "PCB", "IC", "SOC", "IP", "ASSP",
+    "TMT", "HC", "FIG", "TECH", "FIN", "REIT",
+    # Financial / regulatory
+    "EPS", "EBIT", "EBITDA", "PEG", "NAV", "AUM", "IRR", "NPV", "DCF", "WACC",
+    "YTD", "YOY", "QOQ", "TTM", "LTM", "NTM", "FCF", "OCI", "CAPEX", "OPEX",
+    "OPEC", "ESG", "SEC", "EDGAR", "XBRL", "EFTS", "CIK",
+    "IPO", "MNA", "SPAC", "LBO", "MBO", "RSU", "ESOP", "SOX",
+    # Other
+    "FY", "Q1", "Q2", "Q3", "Q4", "H1", "H2", "FY26", "FY27", "FY28",
+    "KCAL", "BIT", "CATL", "NXP",  # company names that aren't on our watchlist
+})
+
+# Valid tickers — built from the default watchlist + common additions.
+_VALID_TICKERS = frozenset({
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "AVGO", "JPM", "TSLA", "WMT",
+    "AMD", "CRM", "SNOW", "PLTR", "NOW", "UBER", "ORCL", "SHOP", "MRVL",
+    "XOM", "CVX", "COP", "SLB", "F", "RIVN", "UNH",
+    "V", "MA", "BAC", "WFC", "GS", "MS", "C", "BX", "SCHW",
+    "LLY", "JNJ", "PFE", "ABBV", "MRK", "TMO", "DHR", "ABT", "BMY", "AMGN",
+    "COST", "HD", "NKE", "SBUX", "MCD", "LOW", "TJX", "TGT",
+    "CAT", "BA", "GE", "HON", "UPS", "RTX", "LMT", "DE", "MMM",
+    "DIS", "NFLX", "CMCSA", "CHTR", "PARA", "WBD",
+    "XLI", "XLK", "XLV", "XLF", "XLE", "XLY", "XLU", "XLP", "XLB", "XLC", "XLRE",
+})
+
+
 def _tickers(subject: str) -> list[str]:
+    """Extract likely tickers from subject/body text.
+
+    Only returns tickers that appear in ``_VALID_TICKERS`` to avoid
+    false positives on words like "AI", "EV", "SVP", etc.
+    """
     out: list[str] = []
     for tok in re.findall(r"\b[A-Z]{1,5}\b", subject):
-        if tok in {"CEO", "CFO", "CRO", "CTO", "USA", "EU", "KOL", "IC"}:
+        if tok in _TICKER_FALSE_POSITIVES:
+            continue
+        if tok not in _VALID_TICKERS:
             continue
         if tok not in out:
             out.append(tok)
-    return out or []
+    return out
 
 
 def _safe_artifact_name(value: str) -> str:
