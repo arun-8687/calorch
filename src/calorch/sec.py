@@ -360,40 +360,4 @@ class SecEdgarClient:
 
 # ---------------------------------------------------------------------------
 # Adapter so the rest of the orchestrator can treat SEC as a GraphClient
-# ---------------------------------------------------------------------------
-class SecAsCalendarClient:
-    """Adapts ``SecEdgarClient`` to the ``GraphClient`` interface.
-
-    Implements only the read side (``list_events``). ``patch_event``,
-    ``send_mail`` and ``create_draft`` are no-ops with a warning — these
-    would normally hit Microsoft Graph in a hybrid (B + C) deployment.
-    """
-
-    def __init__(self, sec: SecEdgarClient, watchlist: list[str], forms: list[str] | None = None) -> None:
-        self._sec = sec
-        self._watchlist = watchlist
-        self._forms = forms
-
-    def list_events(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
-        return self._sec.list_recent_filings(
-            self._watchlist, start.date(), end.date(), forms=self._forms
-        )
-
-    def patch_event(self, event_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        # In a hybrid deployment the body of an 8-K calendar event would
-        # be patched via Graph. Here we just log it.
-        return {"id": event_id, "noop": True, "body": body}
-
-    def send_mail(self, *, to, subject, html, attachment_b64=None) -> str:
-        return "sec-noop-send:" + event_id_stub()
-
-    def create_draft(self, *, to, subject, html, attachment_b64=None) -> str:
-        return "sec-noop-draft:" + event_id_stub()
-
-    def send_draft(self, message_id: str) -> str:
-        return message_id
-
-
-def event_id_stub() -> str:
-    import uuid as _u
-    return _u.uuid4().hex
+# --------------------------------------------------------------------------

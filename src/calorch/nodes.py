@@ -115,7 +115,12 @@ def _ctx(config: RunnableConfig | None = None) -> Context:
 # Calendar stage
 # ---------------------------------------------------------------------------
 def scan_calendar(state: OrchestratorState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
-    """Pull events from the configured calendar source for the requested window."""
+    """Pull events from Microsoft Graph API for the requested window.
+
+    SEC EDGAR is NOT a calendar source.  SEC data is fetched during the
+    enrichment phase (``prepare_event``) via the provider layer
+    (iXBRL segments, EFTS guidance, ticker‑to‑CIK resolution).
+    """
     c = _ctx(config)
     start = state["window_start"]
     end = state["window_end"]
@@ -123,10 +128,7 @@ def scan_calendar(state: OrchestratorState, config: Optional[RunnableConfig] = N
     raw = c.graph.list_events(start, end)
     events = [to_calendar_event(r) for r in raw]
     log.info("found %d events", len(events))
-    note = ""
-    if raw and isinstance(raw[0], dict) and raw[0].get("_cik"):
-        note = f" (source: SEC EDGAR, watchlist tickers: {sorted({r.get('_ticker', '?') for r in raw})})"
-    return {"raw_events": raw, "events": events, "log": [f"scan_calendar: {len(events)} events{note}"]}
+    return {"raw_events": raw, "events": events, "log": [f"scan_calendar: {len(events)} events"]}
 
 
 # ---------------------------------------------------------------------------

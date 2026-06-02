@@ -743,24 +743,6 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# SEC-backed calendar source
-# ---------------------------------------------------------------------------
-def make_sec_calendar_client(settings: "Settings"):  # type: ignore[name-defined]
-    """Build an adapter that presents SEC EDGAR filings as calendar events.
-
-    Imported lazily so the ``calorch.tools`` module does not have a hard
-    runtime dependency on ``httpx`` for users only using mocks.
-    """
-    from calorch.sec import SecAsCalendarClient, SecEdgarClient
-
-    sec = SecEdgarClient(
-        user_agent=settings.sec_user_agent,
-        cache_dir=settings.sec_cache_dir,
-    )
-    return SecAsCalendarClient(sec, watchlist=settings.sec_watchlist, forms=settings.sec_forms), sec
-
-
 def make_cik_lookup(settings: "Settings"):
     """Build a callable ``cik_for(ticker) -> str | None``.
 
