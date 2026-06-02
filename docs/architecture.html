@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>calorch — Solution Architecture (Azure Container Apps)</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --bg-card: #ffffff;
+    --fg: #0f172a;
+    --fg-muted: #475569;
+    --fg-soft: #64748b;
+    --accent: #0ea5e9;
+    --accent-2: #6366f1;
+    --border: #e2e8f0;
+    --code-bg: #f8fafc;
+    --code-fg: #0f172a;
+    --table-stripe: #f8fafc;
+    --shadow: 0 1px 2px rgba(15,23,42,0.05), 0 8px 24px rgba(15,23,42,0.06);
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #f1f5f9; color: var(--fg); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, "Helvetica Neue", sans-serif;
+    line-height: 1.6;
+    font-size: 16px;
+  }
+  .page {
+    max-width: 1080px;
+    margin: 32px auto;
+    padding: 0 16px 64px;
+  }
+  .doc {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 40px 56px 56px;
+  }
+  .doc h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0 0 8px;
+    color: var(--fg);
+    letter-spacing: -0.02em;
+  }
+  .doc > blockquote:first-of-type {
+    margin: 0 0 24px;
+    padding: 12px 16px;
+    background: #f0f9ff;
+    border-left: 4px solid var(--accent);
+    border-radius: 4px;
+    color: #0c4a6e;
+    font-size: 0.95rem;
+  }
+  .doc h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 40px 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--border);
+    color: var(--fg);
+  }
+  .doc h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 24px 0 8px;
+    color: var(--fg);
+  }
+  .doc p { margin: 8px 0 12px; color: var(--fg-muted); }
+  .doc ul, .doc ol { padding-left: 1.5em; color: var(--fg-muted); }
+  .doc li { margin: 4px 0; }
+  .doc strong { color: var(--fg); }
+  .doc a { color: var(--accent-2); text-decoration: none; border-bottom: 1px dotted var(--accent-2); }
+  .doc a:hover { border-bottom-style: solid; }
+  .doc hr {
+    border: 0;
+    height: 1px;
+    background: var(--border);
+    margin: 32px 0;
+  }
+  .doc code {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
+    font-size: 0.9em;
+    border: 1px solid var(--border);
+  }
+  .doc pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  .doc pre code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+  .doc table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.92em;
+  }
+  .doc th, .doc td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .doc th {
+    background: #f8fafc;
+    font-weight: 600;
+    color: var(--fg);
+    border-bottom: 2px solid var(--border);
+  }
+  .doc tbody tr:nth-child(even) { background: var(--table-stripe); }
+  .doc .mermaid {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px 16px;
+    margin: 24px 0;
+    overflow-x: auto;
+    text-align: center;
+  }
+  .doc .footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    color: var(--fg-soft);
+    font-size: 0.9em;
+  }
+  .toc {
+    position: sticky;
+    top: 16px;
+    float: right;
+    width: 220px;
+    margin: 0 0 16px 16px;
+    padding: 12px 16px;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.85em;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  .toc h4 {
+    margin: 0 0 8px;
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--fg-soft);
+  }
+  .toc ul { list-style: none; padding: 0; margin: 0; }
+  .toc li { padding: 2px 0; }
+  .toc a { color: var(--fg-muted); border: 0; }
+  .toc a:hover { color: var(--accent); }
+  @media (max-width: 900px) {
+    .toc { position: static; float: none; width: auto; max-height: none; }
+    .doc { padding: 24px; }
+  }
+  @media print {
+    body { background: white; }
+    .page { margin: 0; padding: 0; max-width: none; }
+    .doc { box-shadow: none; border: 0; padding: 0; }
+    .toc { display: none; }
+    .doc h2 { page-break-before: always; }
+    .doc h2:first-of-type { page-break-before: avoid; }
+    .doc .mermaid { page-break-inside: avoid; }
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75em;
+    font-weight: 600;
+    background: #e0f2fe;
+    color: #0c4a6e;
+    margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<div class="doc">
+<aside class="toc">
+<h4>Contents</h4>
+<ul>
+<li><a href="#high-level-flow">High-level flow</a></li>
+<li><a href="#detailed-component-diagram">Detailed component diagram</a></li>
+<li><a href="#data-flow-single-sec-filing-end-to-end">Data flow — single SEC filing, end to end</a></li>
+<li><a href="#deployment-topology">Deployment topology</a></li>
+<li><a href="#request-lifecycle-human-review-gate">Request lifecycle (human review gate)</a></li>
+<li><a href="#security-amp-governance">Security &amp; governance</a></li>
+<li><a href="#cost-breakdown-monthly-typical-weekly-job">Cost breakdown (monthly, typical weekly job)</a></li>
+<li><a href="#failure-modes-amp-recovery">Failure modes &amp; recovery</a></li>
+<li><a href="#comparison-with-original-adr-option-c-functions">Comparison with original ADR (Option C, Functions)</a></li>
+<li><a href="#data-source-layer-built-today">Data source layer (built today)</a></li>
+</ul>
+</aside><h1>calorch — Solution Architecture (Azure Container Apps)</h1>
+<blockquote>
+<p>End-to-end architecture of the Calendar-Driven Intelligent Workflow
+Orchestrator, deployed on Azure Container Apps (Consumption tier).
+Covers data sources, classification, parallel fan-out, delivery,
+persistence, governance, and observability.</p>
+</blockquote>
+<hr />
+<h2 id="high-level-flow">High-level flow</h2>
+<div class="mermaid-placeholder" data-idx="0"></div>
+<hr />
+<h2 id="detailed-component-diagram">Detailed component diagram</h2>
+<div class="mermaid-placeholder" data-idx="1"></div>
+<hr />
+<h2 id="data-flow-single-sec-filing-end-to-end">Data flow — single SEC filing, end to end</h2>
+<div class="mermaid-placeholder" data-idx="2"></div>
+<hr />
+<h2 id="deployment-topology">Deployment topology</h2>
+<div class="mermaid-placeholder" data-idx="3"></div>
+<hr />
+<h2 id="request-lifecycle-human-review-gate">Request lifecycle (human review gate)</h2>
+<div class="mermaid-placeholder" data-idx="4"></div>
+<hr />
+<h2 id="security-amp-governance">Security &amp; governance</h2>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Control</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Credential storage</strong></td>
+<td>ACA secrets today; use Key Vault references before production rollout</td>
+</tr>
+<tr>
+<td><strong>Container pull</strong></td>
+<td>Managed identity + AcrPull role, no admin password</td>
+</tr>
+<tr>
+<td><strong>Cosmos access</strong></td>
+<td>Cosmos account key in ACA secret today; managed identity is the target hardening step</td>
+</tr>
+<tr>
+<td><strong>OpenAI access</strong></td>
+<td>Azure OpenAI key in ACA secret today; managed identity is the target hardening step</td>
+</tr>
+<tr>
+<td><strong>Graph access</strong></td>
+<td>App registration (client credentials), secret in ACA secret store</td>
+</tr>
+<tr>
+<td><strong>HTTP API access</strong></td>
+<td><code>X-Calorch-API-Key</code> required for <code>/run</code> and <code>/runs/*</code>; health probe remains public</td>
+</tr>
+<tr>
+<td><strong>Email draft vs send</strong></td>
+<td><code>send_emails=False</code> default — human approves per event</td>
+</tr>
+<tr>
+<td><strong>Interrupt gate</strong></td>
+<td><code>approval_gate</code> calls <code>interrupt()</code> after previews; <code>POST /runs/{id}/approval</code> resumes</td>
+</tr>
+<tr>
+<td><strong>SEC fair-use</strong></td>
+<td><code>_RateLimiter</code> (9 req/sec, thread-safe) + <code>.cache/sec/</code> disk cache</td>
+</tr>
+<tr>
+<td><strong>LLM tracing</strong></td>
+<td>LangSmith environment configuration; add PII redaction before enabling on sensitive calendars</td>
+</tr>
+<tr>
+<td><strong>Network egress</strong></td>
+<td>ACA outbound to Graph/EDGAR/OpenAI over HTTPS only; no VNet required at this tier</td>
+</tr>
+<tr>
+<td><strong>Image scanning</strong></td>
+<td>Enable Microsoft Defender for container registries in the Azure subscription</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="cost-breakdown-monthly-typical-weekly-job">Cost breakdown (monthly, typical weekly job)</h2>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Quantity</th>
+<th>Unit</th>
+<th>Monthly</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ACR (Basic)</td>
+<td>1</td>
+<td>$5.00</td>
+<td>$5.00</td>
+</tr>
+<tr>
+<td>Container Apps active time</td>
+<td>~20 min/wk</td>
+<td>$0.000012/vCPU-sec</td>
+<td>$0.30</td>
+</tr>
+<tr>
+<td>Cosmos DB Serverless</td>
+<td>100 RUs, 50 MB</td>
+<td>$0.25/GB</td>
+<td>$0.05</td>
+</tr>
+<tr>
+<td>Log Analytics</td>
+<td>1 GB ingested</td>
+<td>$2.30/GB</td>
+<td>$2.30</td>
+</tr>
+<tr>
+<td>Key Vault</td>
+<td>10 secrets, 10k ops</td>
+<td>$0.03/10k</td>
+<td>$0.01</td>
+</tr>
+<tr>
+<td>Azure OpenAI (Pass 2 only)</td>
+<td>~5k calls/wk</td>
+<td>~$0.01/call</td>
+<td>$20.00</td>
+</tr>
+<tr>
+<td>LangSmith Developer</td>
+<td>1 seat</td>
+<td>$39</td>
+<td>$39.00</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td></td>
+<td></td>
+<td><strong>~$66.66/mo</strong></td>
+</tr>
+</tbody>
+</table>
+<p>For a 4-week run (1,000 filings, all 8 types, 1 LLM call per filing):</p>
+<ul>
+<li>Cold-start amortised: ~10s × 4 = 40s</li>
+<li>Active time: ~5 min × 4 = 20 min</li>
+<li>LLM calls: SEC path skips Pass 2 (confidence 0.95), so only Outlook events
+invoke GPT-4o. With a 200-event Outlook calendar that's ~$8/mo.</li>
+</ul>
+<hr />
+<h2 id="failure-modes-amp-recovery">Failure modes &amp; recovery</h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Detection</th>
+<th>Recovery</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>EDGAR rate-limited</td>
+<td>429 response</td>
+<td><code>_RateLimiter</code> backs off automatically</td>
+</tr>
+<tr>
+<td>EDGAR down</td>
+<td>connect error</td>
+<td>Filing skipped, error logged, rest of pipeline continues</td>
+</tr>
+<tr>
+<td>OneDrive 401</td>
+<td>token expired</td>
+<td>MSAL refresh-token flow, transparent to caller</td>
+</tr>
+<tr>
+<td>LLM timeout</td>
+<td>OpenAI 30s default</td>
+<td>Pass 1 hint used (confidence 0.4), error recorded</td>
+</tr>
+<tr>
+<td>Cosmos write conflict</td>
+<td>409 from server</td>
+<td>SDK retries with new session token</td>
+</tr>
+<tr>
+<td>ACA cold-start</td>
+<td>first weekly run</td>
+<td>5-10s added; LangGraph checkpointer restores from last checkpoint</td>
+</tr>
+<tr>
+<td>Graph send quota</td>
+<td>429 from Graph</td>
+<td>Microsoft Graph throttling headers respected (Retry-After)</td>
+</tr>
+<tr>
+<td>Image pull failure</td>
+<td>401/403 from ACR</td>
+<td>AcrPull role re-checked; image tag rolled back via ACA revision</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="comparison-with-original-adr-option-c-functions">Comparison with original ADR (Option C, Functions)</h2>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>ADR Option C (Functions)</th>
+<th>This impl (ACA)</th>
+<th>Azure Durable Functions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Runtime</td>
+<td>Azure Functions (Consumption)</td>
+<td>Container Apps (Consumption)</td>
+<td>Azure Functions (Consumption)</td>
+</tr>
+<tr>
+<td>Cold start</td>
+<td>per-function</td>
+<td>per-revision (1x/week)</td>
+<td>per-function</td>
+</tr>
+<tr>
+<td>Per-node timeout</td>
+<td>5 min default, 10 min max</td>
+<td>unbounded</td>
+<td>5 min default, 10 min max</td>
+</tr>
+<tr>
+<td>Checkpointer</td>
+<td>Durable Functions orchestration state</td>
+<td>LangGraph <code>PostgresSaver</code> (<code>MemorySaver</code> only for local dev)</td>
+<td>Built-in task hub (Azure Storage)</td>
+</tr>
+<tr>
+<td>State sharing</td>
+<td>orchestrator output binding</td>
+<td><code>configurable[&quot;context&quot;]</code> injection</td>
+<td>Orchestrator local variables (deterministic only)</td>
+</tr>
+<tr>
+<td>Parallel fan-out</td>
+<td><code>task.all([...])</code></td>
+<td><code>Send</code> API (one line)</td>
+<td><code>task_all([call_sub_orchestrator(...)])</code></td>
+</tr>
+<tr>
+<td>Scale to zero</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Cost (weekly 1k events)</td>
+<td>Functions: ~$5; Premium EP1: ~$160</td>
+<td>~$7</td>
+<td>~$5–10</td>
+</tr>
+<tr>
+<td>Code complexity</td>
+<td>N×function.json + bindings</td>
+<td>1 Dockerfile, 1 ACA YAML</td>
+<td>N×activity + 1 orchestrator + bindings</td>
+</tr>
+<tr>
+<td>Multi-day pauses</td>
+<td>native (durable timers)</td>
+<td>supported with <code>CHECKPOINT_POSTGRES_URI</code></td>
+<td>native (<code>WaitForExternalEvent</code> + durable timers)</td>
+</tr>
+<tr>
+<td>Best for calorch?</td>
+<td>acceptable</td>
+<td><strong>yes</strong></td>
+<td>poor (determinism + 10-min cap)</td>
+</tr>
+</tbody>
+</table>
+<p>The ADR's Functions architecture is preserved in spirit (per-node
+boundary, durable orchestration, scale-to-zero) but realised on a
+runtime that doesn't impose a 10-minute execution limit on the
+per-event pipeline — important when a single event triggers
+Graph + EDGAR + OpenAI + OneDrive + Outlook + Cosmos round trips.</p>
+<p>For the full evaluation of why we chose LangGraph on ACA over Durable
+Functions, see <code>docs/evaluations/azure-durable-functions.md</code>.</p>
+<p>For the enterprise-grade data-source strategy (Refinitiv / FactSet / Tiingo
+/ FRED / SEC), see <code>docs/evaluations/enterprise-data-sources.md</code>. For a
+per-field gap analysis (what SEC has, what needs supplementing), see
+<code>docs/evaluations/sec-edgar-coverage.md</code>.</p>
+<h2 id="data-source-layer-built-today">Data source layer (built today)</h2>
+<p>The orchestrator is wired against a <code>ProviderBundle</code> of free, official
+sources plus stubs for fields that require a paid terminal:</p>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Real impl</th>
+<th>Stub</th>
+<th>Triggered by env var</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Macro (VIX, 10Y, oil, …)</td>
+<td>FRED + FOMC H.15</td>
+<td><code>StubFredClient</code> + <code>StubFedH15Client</code></td>
+<td><code>FRED_API_KEY</code>, <code>USE_FRED</code>, <code>USE_FED_H15</code></td>
+</tr>
+<tr>
+<td>Segments (product)</td>
+<td><code>SecIxbrlClient</code> (real parser)</td>
+<td><code>StubIxbrlClient</code> (curated AAPL/MSFT/…)</td>
+<td><code>USE_IXBRL_SEGMENTS</code></td>
+</tr>
+<tr>
+<td>Segments (geographic)</td>
+<td><code>SecIxbrlClient</code> (real parser)</td>
+<td><code>StubIxbrlClient</code> (curated AAPL)</td>
+<td><code>USE_IXBRL_SEGMENTS</code></td>
+</tr>
+<tr>
+<td>Narrative (guidance)</td>
+<td><code>SecEftsClient</code> (real search)</td>
+<td><code>StubEftsClient</code> (curated AAPL/MSFT/NVDA)</td>
+<td><code>USE_SEC_EFTS</code></td>
+</tr>
+<tr>
+<td>Price (52w, market cap)</td>
+<td>(none — no free source)</td>
+<td><code>StubPriceProvider</code></td>
+<td><code>TIINGO_API_KEY</code> (when issued)</td>
+</tr>
+<tr>
+<td>Consensus (EPS est, target)</td>
+<td>(none — no free source)</td>
+<td><code>StubConsensusProvider</code></td>
+<td><code>REFINITIV_CLIENT_ID</code> (when issued)</td>
+</tr>
+</tbody>
+</table>
+<p>The dispatcher in <code>src/calorch/providers.py:build_providers()</code> reads
+<code>Settings</code> and returns the right implementation. The renderer never knows
+which one is wired.</p>
+<hr />
+<p><strong>See also:</strong> <code>deploy/README.md</code> · <code>IMPLEMENTATION_REVIEW.md</code> · <code>langgraph.json</code></p>
+
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  // Mermaid source blocks, embedded as a JSON array to avoid markdown-it
+  // mangling brackets/parens inside the diagram definitions.
+  const MERMAID_DIAGRAMS = ["flowchart TB\n    subgraph TRIGGERS[\"\u23f0 Triggers\"]\n        CRON[\"ACA cron scale rule<br/>0 6 * * MON\"]\n        API[\"POST /run<br/>(HTTP)\"]\n    end\n\n    subgraph ACA[\"Azure Container Apps (calorch)\"]\n        LB[\"Ingress / FQDN<br/>FastAPI :8000\"]\n        GRAPH[\"StateGraph<br/>(LangGraph)\"]\n\n        subgraph FRONT[\"Front stage\"]\n            SCAN[\"scan_calendar<br/>Graph + SEC EDGAR\"]\n            KW[\"prefilter_keywords<br/>Pass 1\"]\n            LLM[\"llm_classify<br/>Pass 2 \u00b7 GPT-4o SO\"]\n        end\n\n        subgraph FANOUT[\"Prepare fan-out (Send API, parallel)\"]\n            P1[\"prepare_event #1\"]\n            P2[\"prepare_event #2\"]\n            PN[\"prepare_event #N\"]\n        end\n\n        GATE[\"approval_gate<br/>interrupt() before send\"]\n        DELIVER[\"deliver_event fan-out<br/>draft/send \u00b7 patch \u00b7 repo\"]\n        AGG[\"aggregate_briefing<br/>weekly.html\"]\n    end\n\n    subgraph EXTERNAL[\"External services\"]\n        M365[\"Microsoft 365<br/>Graph \u00b7 Outlook \u00b7 OneDrive\"]\n        SEC[\"SEC EDGAR<br/>submissions \u00b7 XBRL \u00b7 tickers\"]\n        OPENAI[\"Azure OpenAI<br/>GPT-4o \u00b7 Structured Output\"]\n    end\n\n    subgraph AZURE[\"Azure platform\"]\n        COSMOS[(\"Cosmos DB<br/>events container\")]\n        PG[(\"PostgreSQL<br/>LangGraph checkpoints\")]\n        ACR[(\"ACR Basic<br/>calorch:tag\")]\n        LAW[(\"Log Analytics<br/>App Insights\")]\n        KEYVAULT[(\"Key Vault<br/>secrets\")]\n    end\n\n    subgraph OBS[\"Observability\"]\n        SM[\"LangSmith<br/>traces \u00b7 evals\"]\n    end\n\n    CRON --> LB\n    API --> LB\n    LB --> GRAPH\n    GRAPH --> SCAN --> KW --> LLM\n    LLM --> P1\n    LLM --> P2\n    LLM --> PN\n    P1 & P2 & PN --> GATE --> DELIVER --> AGG\n\n    SCAN <-->|read| M365\n    SCAN <-->|read| SEC\n    LLM <-->|invoke| OPENAI\n    P1 & P2 & PN <-->|read| M365\n    P1 & P2 & PN <-->|XBRL fallback| SEC\n    DELIVER <-->|draft/send + patch| M365\n    DELIVER -->|upsert| COSMOS\n    P1 & P2 & PN -.->|upload| M365\n    GATE -.->|checkpoint| PG\n\n    GRAPH -.->|traces| SM\n    ACA -->|logs| LAW\n    KEYVAULT -.->|secrets| ACA\n    ACR -.->|pull| ACA", "flowchart TB\n    classDef trigger fill:#FFF4E1,stroke:#D97706,color:#7C2D12\n    classDef container fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E\n    classDef stage fill:#DBEAFE,stroke:#1D4ED8,color:#1E3A8A\n    classDef parallel fill:#FEF3C7,stroke:#D97706,color:#78350F\n    classDef external fill:#F3E8FF,stroke:#7C3AED,color:#581C87\n    classDef azure fill:#E0E7FF,stroke:#4338CA,color:#312E81\n    classDef store fill:#DCFCE7,stroke:#15803D,color:#14532D\n    classDef obs fill:#FCE7F3,stroke:#BE185D,color:#831843\n\n    %% ====== TRIGGERS ======\n    subgraph T1[\"TRIGGERS\"]\n        direction TB\n        CRON[\"ACA cron scale rule<br/>(KEDA \u00b7 weekly)\"]:::trigger\n        HTTPC[\"POST /run<br/>(on-demand)\"]:::trigger\n        INT[\"interrupt()<br/>approval_gate<br/>(human approval)\"]:::trigger\n    end\n\n    %% ====== AZURE CONTAINER APPS ======\n    subgraph T2[\"AZURE CONTAINER APPS  \u00b7  rg-calorch-prod  \u00b7  eastus\"]\n        direction TB\n        subgraph T2A[\"Container App: calorch  (1 vCPU \u00b7 2 Gi \u00b7 min=0 max=3)\"]\n            direction TB\n            INGRESS[\"Ingress / FQDN<br/>HTTPS \u00b7 managed cert\"]:::container\n            SERVE[\"FastAPI \u00b7 uvicorn<br/>calorch.serve:app\"]:::container\n            CHECK[\"PostgresSaver<br/>(durable thread checkpoint)\"]:::container\n\n            subgraph T2B[\"LangGraph StateGraph\"]\n                direction LR\n                N1[\"scan_calendar<br/>(Graph + SEC adapter)\"]:::stage\n                N2[\"prefilter_keywords<br/>Pass 1 \u00b7 zero-cost\"]:::stage\n                N3[\"llm_classify<br/>Pass 2 \u00b7 typed enum\"]:::stage\n                N1 --> N2 --> N3\n\n                subgraph T2C[\"PREPARE FAN-OUT  (Send API)\"]\n                    direction TB\n                    W1[\"prepare #1<br/>enrich\u2192docx\u2192html\u2192drive\"]:::parallel\n                    W2[\"prepare #2\"]:::parallel\n                    WN[\"prepare #N<br/>(1,000+ events/wk)\"]:::parallel\n                end\n                N3 -.->|\"Send(payload)\"| W1\n                N3 -.->|\"Send(payload)\"| W2\n                N3 -.->|\"Send(payload)\"| WN\n\n                GATE[\"approval_gate<br/>interrupt() before requested send\"]:::stage\n                DELIVER[\"deliver_event fan-out<br/>draft/send\u2192calendar\u2192repo\"]:::parallel\n                N4[\"aggregate_briefing<br/>cross-event summary\"]:::stage\n                W1 & W2 & WN --> GATE --> DELIVER --> N4\n            end\n            INGRESS --> SERVE --> CHECK\n            SERVE --> N1\n        end\n    end\n\n    %% ====== EXTERNAL SERVICES ======\n    subgraph T3[\"EXTERNAL SERVICES\"]\n        direction TB\n        subgraph T3A[\"Microsoft 365 tenant\"]\n            M1[\"Graph API<br/>/me/calendar/calendarView\"]:::external\n            M2[\"Graph API<br/>sendMail / createDraft\"]:::external\n            M3[\"OneDrive for Business<br/>DOCX archive\"]:::external\n        end\n        subgraph T3B[\"SEC EDGAR  (data.sec.gov)\"]\n            S1[\"submissions/CIK{cik}.json<br/>filings list\"]:::external\n            S2[\"xbrl/companyfacts/<br/>CIK{cik}.json\"]:::external\n            S3[\"company_tickers.json<br/>(CIK \u2194 ticker)\"]:::external\n        end\n        OAI[\"Azure OpenAI<br/>GPT-4o \u00b7 Structured Output<br/>deployment: gpt-4o\"]:::external\n    end\n\n    %% ====== AZURE PLATFORM ======\n    subgraph T4[\"AZURE PLATFORM\"]\n        direction TB\n        COSMOS[(\"Cosmos DB<br/>serverless \u00b7 SQL API<br/>db=calorch \u00b7 container=events<br/>partition key: /event_id\")]:::store\n        PG[(\"PostgreSQL<br/>LangGraph checkpoints\")]:::store\n        KV[(\"Key Vault<br/>graph-secret \u00b7 cosmos-key<br/>openai-key \u00b7 langsmith-key\")]:::store\n        CR[(\"ACR Basic<br/>calorch.azurecr.io<br/>calorch:tag\")]:::store\n        LA[(\"Log Analytics<br/>+ App Insights<br/>(Container Apps env)\")]:::store\n    end\n\n    %% ====== OBSERVABILITY ======\n    subgraph T5[\"OBSERVABILITY\"]\n        direction TB\n        LS[\"LangSmith<br/>traces \u00b7 evals \u00b7 datasets\"]:::obs\n    end\n\n    %% ====== EDGES ======\n    CRON -->|scales 0\u21921| INGRESS\n    HTTPC --> INGRESS\n    INGRESS -->|FastAPI| SERVE\n\n    N1 -->|HTTPS| M1\n    N1 -->|HTTPS| S1\n    N1 -->|HTTPS| S3\n    N3 -->|HTTPS + JSON-schema| OAI\n\n    W1 & W2 & WN -->|HTTPS| S2\n    DELIVER -->|HTTPS| M2\n    W1 & W2 & WN -->|HTTPS| M3\n    DELIVER -->|SQL API| COSMOS\n    GATE -->|checkpoint| PG\n\n    KV -.->|managed-identity| SERVE\n    CR -.->|AcrPull| T2A\n    T2A -->|stdout| LA\n\n    N1 & N2 & N3 & W1 & W2 & WN & N4 -.->|traces| LS\n    INT -.->|pauses| GATE", "sequenceDiagram\n    autonumber\n    participant K as KEDA cron\n    participant A as ACA \u00b7 calorch\n    participant G as Graph API\n    participant S as SEC EDGAR\n    participant O as Azure OpenAI\n    participant L as OneDrive\n    participant M as Graph Mail\n    participant C as Cosmos DB\n    participant P as PostgreSQL checkpoint\n    participant H as Human reviewer\n    participant T as LangSmith\n\n    K->>A: scale 0\u21921 (Monday 06:00 UTC)\n    A->>S: GET /company_tickers.json\n    S-->>A: ticker\u2194CIK map\n    loop for each ticker in watchlist\n        A->>S: GET /submissions/CIK{cik}.json\n        S-->>A: filings[] (form, items, date, accession)\n    end\n    A->>S: GET /xbrl/companyfacts/CIK{cik}.json (per ticker)\n    S-->>A: revenue, net_income, eps\n    A->>A: Pass 1: classify_form(form, items)\n    Note over A: 8-K items=2.02 \u2192 earnings_call<br/>8-K items=5.07 \u2192 conference\n    alt confidence < 0.95\n        A->>O: structured classify\n        O-->>A: ClassificationResult\n    end\n    A->>T: log trace\n    par prepare per filing (parallel Send)\n        A->>S: GET XBRL (latest)\n        S-->>A: snapshot\n        A->>A: build_analysis(type, ev, ed)\n        A->>A: render DOCX (python-docx)\n        A->>L: PUT /drive/items/{id}:/calorch/{ev_id}.docx\n        L-->>A: webUrl\n        A->>A: render HTML email preview\n    end\n    alt send_emails = true and require_approval = true\n        A->>P: checkpoint prepared previews\n        A-->>H: pending_approval\n        H->>A: POST /runs/{id}/approval\n    end\n    par deliver per filing (parallel Send)\n        A->>M: POST /me/messages (record stable draft id)\n        alt send_emails = true\n            A->>C: UPSERT status=prepared, draft id\n            A->>M: POST /messages/{id}/send\n        end\n        A->>C: UPSERT final delivery status\n    end\n    A->>A: aggregate_briefing\n    A-->>K: exit (scale 1\u21920)", "flowchart LR\n    classDef rg fill:#EEF2FF,stroke:#4338CA,color:#312E81\n    classDef role fill:#FEF3C7,stroke:#D97706,color:#78350F\n\n    subgraph RG[\"Resource Group: rg-calorch-prod\"]\n        direction TB\n        ID[\"Managed Identity<br/>(system-assigned)\"]:::role\n        subgraph VNET[\"Container Apps Environment\"]\n            ACA[\"calorch<br/>(revision: latest)\"]\n            ACAENV[\"env, ingress,<br/>Log Analytics link\"]\n        end\n        subgraph SIDECAR[\"Side services\"]\n            ACR[\"ACR Basic<br/>calorch.azurecr.io\"]\n            COSMOS[\"Cosmos DB<br/>serverless\"]\n            PG[\"PostgreSQL<br/>LangGraph checkpoints\"]\n            KV[\"Key Vault\"]\n            OAI[\"Azure OpenAI<br/>(separate RG)\"]\n        end\n    end\n\n    subgraph M365[\"M365 tenant\"]\n        GRAPH[\"Graph API<br/>(Entra app reg)\"]\n        OD[\"OneDrive\"]\n    end\n\n    subgraph SEC[\"SEC EDGAR\"]\n        EDGAR[\"data.sec.gov\"]\n    end\n\n    ID -.->|AcrPull| ACR\n    ID -.->|Cosmos DB Data Contributor| COSMOS\n    ID -.->|Cognitive Services User| OAI\n    ID -.->|Secret User| KV\n    ACA -->|HTTPS| GRAPH\n    ACA -->|HTTPS| OD\n    ACA -->|HTTPS| EDGAR\n    ACA -->|HTTPS| OAI\n    ACA -->|SQL API| COSMOS\n    ACA -->|checkpoint| PG\n    KV -.->|secrets| ACA", "stateDiagram-v2\n    [*] --> Idle: scale = 0\n    Idle --> Booting: cron OR /run\n    Booting --> PullingImage: AcrPull (managed identity)\n    PullingImage --> Starting: cold-start ~5-10s\n    Starting --> Scanning: scan_calendar\n    Scanning --> Classifying: Pass 1 (keywords/SEC)\n    Classifying --> Classifying: Pass 2 (GPT-4o SO)\n    Classifying --> FanOut: Send \u00d7 N prepare branches\n\n    state FanOut <<choice>>\n    FanOut --> Enriching: prepare_event\n    Enriching --> RenderingDOCX: build_analysis\n    RenderingDOCX --> UploadingOneDrive\n    UploadingOneDrive --> PreviewingEmail\n\n    state PreviewingEmail <<choice>>\n    PreviewingEmail --> DraftingEmail: draft mode (default)\n    PreviewingEmail --> HumanReview: send + require_approval\n    HumanReview --> Checkpointed: interrupt()<br/>(pause)\n    Checkpointed --> Resumed: POST /runs/{id}/approval\n    Resumed --> DraftingEmail\n    DraftingEmail --> SendingEmail: send requested\n    DraftingEmail --> PersistingRepo: draft mode\n    SendingEmail --> PersistingRepo: Cosmos upsert\n    PersistingRepo --> Aggregating\n    Aggregating --> BriefingWritten\n    BriefingWritten --> Idle: scale = 0"];
+  document.addEventListener("DOMContentLoaded", function() {
+    // Hydrate placeholders
+    document.querySelectorAll(".mermaid-placeholder").forEach(function(el) {
+      const idx = parseInt(el.getAttribute("data-idx"), 10);
+      const div = document.createElement("div");
+      div.className = "mermaid";
+      div.textContent = MERMAID_DIAGRAMS[idx];
+      el.replaceWith(div);
+    });
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "default",
+      securityLevel: "loose",
+      flowchart: { useMaxWidth: true, htmlLabels: true, curve: "basis" },
+      sequence: { useMaxWidth: true, showSequenceNumbers: false },
+      themeVariables: {
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        fontSize: "13px"
+      }
+    });
+  });
+</script>
+</body>
+</html>

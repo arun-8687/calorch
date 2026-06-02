@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0",
+  "event_type": "channel_check",
+  "report_header": {
+    "title": "{primary_ticker} — Channel Check Preparation",
+    "company": "{company_name} | {sector}",
+    "event": "{channel_type} Channel Check",
+    "date": "{event_date} | {event_time}"
+  },
+  "metadata_table": {
+    "table_type": "two_col",
+    "rows": [
+      {"label": "Contact:", "value": "{contact_name}"},
+      {"label": "Meeting Date:", "value": "{event_date} | {event_time}"},
+      {"label": "Location:", "value": "{location}"},
+      {"label": "Prepared By:", "value": "{prepared_by}"},
+      {"label": "Classification:", "value": "{channel_type} Channel Check"}
+    ]
+  },
+  "sections": [
+    {
+      "id": "model_assumptions",
+      "title": "Section 1: Model Assumptions Summary",
+      "source": "data",
+      "subsections": [
+        {
+          "id": "revenue_overview",
+          "title": "Revenue Overview",
+          "source": "llm",
+          "llm_method": "enrich_headline",
+          "fallback": ["{primary_ticker} reported revenue of {rev_actual}. TTM revenue stands at {rev_ttm}. The street expects {rev_estimate}. Current price: {price}."],
+          "prompt_addendum": "Write a 3-4 sentence revenue overview paragraph. Cover: last quarter revenue, TTM, consensus for next quarter, current price and market cap. Be factual with numbers."
+        },
+        {
+          "id": "revenue_by_segment",
+          "title": "Revenue by Segment ({last_quarter_label})",
+          "source": "data",
+          "table_type": "multi_col",
+          "headers": ["Segment", "{last_quarter_label}", "{prev_quarter_label}", "{prior_year_quarter_label}", "% of Rev"],
+          "rows_from": "segments"
+        },
+        {
+          "id": "revenue_by_geo",
+          "title": "Revenue by Geography ({last_quarter_label})",
+          "source": "data",
+          "table_type": "multi_col",
+          "headers": ["Region", "{last_quarter_label}", "{prev_quarter_label}", "{prior_year_quarter_label}", "YoY Change"],
+          "rows_from": "geo"
+        },
+        {
+          "id": "margin_profile",
+          "title": "Margin Profile",
+          "source": "data",
+          "table_type": "multi_col",
+          "headers": ["Metric", "{last_quarter_label}", "{prev_quarter_label}", "{prior_year_quarter_label}", "TTM"],
+          "rows": [
+            ["Gross Margin", "{gross_margin}", "{gross_margin_prev}", "{gross_margin_py}", "{gross_margin_ttm}"],
+            ["Operating Margin", "{operating_margin}", "{operating_margin_prev}", "{operating_margin_py}", "{operating_margin_ttm}"],
+            ["Net Margin", "{net_margin}", "{net_margin_prev}", "{net_margin_py}", "{net_margin_ttm}"],
+            ["FCF Margin", "{fcf_margin}", "{fcf_margin_prev}", "{fcf_margin_py}", "{fcf_margin_ttm}"]
+          ]
+        },
+        {
+          "id": "key_metrics",
+          "title": "Key Operating Metrics",
+          "source": "static",
+          "content": [
+            "Inventory Days: {inventory_days} vs. {inventory_days_py} a year ago",
+            "Cash Conversion Cycle: {ccc} days",
+            "Buyback: {buyback_q} in {last_quarter_label} | {buyback_ttm} TTM",
+            "FCF: {fcf_q} in {last_quarter_label} | {fcf_ttm} TTM",
+            "CapEx: {capex_q} ({capex_pct}% of revenue)",
+            "R&D: {rd_q} ({rd_pct}% of revenue)",
+            "Analyst Consensus: {consensus_rating} | Price Target {price_target} ({upside_pct}% upside)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "metrics_to_validate",
+      "title": "Section 2: Key Metrics to Validate",
+      "source": "static",
+      "content": [
+        "The following model assumptions require primary data validation through this channel check. Prioritized by investment thesis impact."
+      ],
+      "table_type": "multi_col",
+      "headers": ["Metric", "Model Assumption", "Period", "Why It Matters", "Conf."],
+      "rows": [
+        ["{metric_1}", "{assumption_1}", "{period_1}", "{rationale_1}", "{conf_1}"],
+        ["{metric_2}", "{assumption_2}", "{period_2}", "{rationale_2}", "{conf_2}"],
+        ["{metric_3}", "{assumption_3}", "{period_3}", "{rationale_3}", "{conf_3}"]
+      ]
+    },
+    {
+      "id": "questionnaire",
+      "title": "Section 3: Standardized Questionnaire",
+      "source": "llm",
+      "llm_method": "enrich_channel_check_questions",
+      "fallback": [
+        {
+          "section": "Demand & Volume",
+          "questions": [
+            {"q": "Q1. How would you characterize demand over the past 90 days?", "followup": "Any regional differences?", "maps_to": "Revenue Volume"},
+            {"q": "Q2. What demand signals are you seeing from key markets?", "followup": "Any government procurement shifts?", "maps_to": "Geographic Revenue"}
+          ]
+        },
+        {
+          "section": "Pricing Trends",
+          "questions": [
+            {"q": "Q3. Are you seeing promotional intensity beyond normal patterns?", "followup": "Any trade-in program changes?", "maps_to": "ASP Trajectory"}
+          ]
+        }
+      ],
+      "prompt_addendum": "Write a structured channel check questionnaire with 15-20 questions across 5 themes: Demand & Volume, Pricing Trends, Competitive Dynamics, Inventory & Supply Chain, and Forward Outlook. For each question include: the question, a follow-up prompt, and what metric it maps to. Format clearly with section headers."
+    },
+    {
+      "id": "channel_tracking",
+      "title": "Channel Finding Tracker",
+      "source": "static",
+      "table_type": "multi_col",
+      "headers": ["Model Metric", "Our Model", "Channel Finding", "Variance", "Thesis Implication", "Conf."],
+      "blank_rows": 12
+    },
+    {
+      "id": "contact_log",
+      "title": "Contact Log",
+      "source": "static",
+      "table_type": "multi_col",
+      "headers": ["Date", "Contact / Company", "Key Finding", "Model Impact", "Conf.", "Follow-up Questions"],
+      "blank_rows": 8
+    }
+  ]
+}

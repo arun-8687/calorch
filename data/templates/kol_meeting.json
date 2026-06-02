@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "event_type": "kol_meeting",
+  "report_header": {
+    "title": "KOL MEETING PREP",
+    "expert": "{expert_name}",
+    "event": "Expert Consultation Call",
+    "date": "{event_date} | {event_time}"
+  },
+  "metadata_table": {
+    "table_type": "two_col",
+    "rows": [
+      {"label": "Expert", "value": "{expert_name}"},
+      {"label": "Affiliation", "value": "{affiliation}"},
+      {"label": "Meeting Type", "value": "{meeting_type}"},
+      {"label": "Date", "value": "{event_date}"}
+    ]
+  },
+  "sections": [
+    {
+      "id": "meeting_context",
+      "title": "Meeting Context",
+      "source": "static",
+      "content": [
+        "Expert consultation on {topic_area}.",
+        "Prep pack provides a structured framework for the discussion."
+      ]
+    },
+    {
+      "id": "pre_call_research",
+      "title": "Pre-Call Research Notes",
+      "source": "llm",
+      "llm_method": "enrich_headline",
+      "fallback": ["Pre-call research on {expert_name} and {topic_area}. Check LinkedIn, institutional websites, and recent publications before the call."],
+      "prompt_addendum": "Write 3-4 sentences of pre-call research notes for a KOL meeting. Suggest what to look up about the expert and the topic area."
+    },
+    {
+      "id": "discussion_guide",
+      "title": "Discussion Guide",
+      "source": "static",
+      "subsections": [
+        {
+          "title": "Clinical Landscape",
+          "questions": [
+            "What is your assessment of the current disease landscape?",
+            "What are the major unmet medical needs?",
+            "How is the standard of care evolving?"
+          ]
+        },
+        {
+          "title": "Competitive Dynamics",
+          "questions": [
+            "What emerging therapies concern you most?",
+            "What competitive advantages matter most?",
+            "What is your view on the clinical trial landscape?"
+          ]
+        },
+        {
+          "title": "Commercial Outlook",
+          "questions": [
+            "What are the key market access barriers?",
+            "How are pricing dynamics evolving?",
+            "What drives adoption curves in your view?"
+          ]
+        },
+        {
+          "title": "Regulatory Environment",
+          "questions": [
+            "What regulatory pathways are realistic?",
+            "What are approval timelines likely to be?",
+            "What policy changes would impact your field?"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hypotheses",
+      "title": "Key Hypotheses to Test",
+      "source": "llm",
+      "llm_method": "enrich_key_questions",
+      "fallback": [],
+      "prompt_addendum": "Write 4-5 investment hypotheses to test with this KOL. Each should be a short statement that the expert can validate or refute. Format as numbered statements."
+    },
+    {
+      "id": "hypothesis_table",
+      "title": "Hypothesis Tracker",
+      "source": "static",
+      "table_type": "multi_col",
+      "headers": ["Hypothesis", "Supporting Evidence", "KOL's View", "Investment Implication"],
+      "blank_rows": 4
+    },
+    {
+      "id": "note_template",
+      "title": "Note-Taking Template",
+      "source": "static",
+      "table_type": "multi_col",
+      "headers": ["Question #", "Expert Response", "Key Insight", "Follow-Up Needed"],
+      "blank_rows": 12
+    }
+  ]
+}

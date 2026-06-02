@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "event_type": "portfolio_meeting",
+  "report_header": {
+    "title": "WEEKLY PORTFOLIO REVIEW",
+    "meeting": "Investment Team Meeting",
+    "date": "{event_date} | {event_time}"
+  },
+  "sections": [
+    {
+      "id": "market_context",
+      "title": "Market Context",
+      "source": "data",
+      "table_type": "two_col",
+      "rows": [
+        {"label": "S&P 500", "value": "{sp500}"},
+        {"label": "NASDAQ", "value": "{nasdaq}"},
+        {"label": "VIX", "value": "{vix}"},
+        {"label": "10Y Treasury", "value": "{treasury_10y}"},
+        {"label": "2Y Treasury", "value": "{treasury_2y}"},
+        {"label": "Fed Funds", "value": "{fed_funds}"},
+        {"label": "USD/EUR", "value": "{usd_eur}"},
+        {"label": "Oil (WTI)", "value": "{oil_wti}"}
+      ]
+    },
+    {
+      "id": "sector_performance",
+      "title": "Sector Performance",
+      "source": "data",
+      "table_type": "multi_col",
+      "headers": ["Sector (ETF)", "1M Return", "YTD Return"],
+      "rows_from": "sector_performance"
+    },
+    {
+      "id": "holdings_snapshot",
+      "title": "Portfolio Holdings Snapshot",
+      "source": "data",
+      "table_type": "multi_col",
+      "headers": ["Position", "Last Price", "1W Return", "1M Return", "YTD", "Consensus"],
+      "rows_from": "holdings"
+    },
+    {
+      "id": "key_movers",
+      "title": "Key Movers This Week",
+      "source": "llm",
+      "llm_method": "enrich_headline",
+      "fallback": ["Key portfolio movers this week."],
+      "prompt_addendum": "Write 3-4 bullet points on the biggest portfolio movers this week. For each: ticker, % change, and the driver (earnings, macro, sector rotation, etc.). Be concise."
+    },
+    {
+      "id": "upcoming_catalysts",
+      "title": "Upcoming Catalysts",
+      "source": "data",
+      "table_type": "multi_col",
+      "headers": ["Date", "Company", "Event"],
+      "rows_from": "catalysts"
+    },
+    {
+      "id": "discussion_items",
+      "title": "Discussion Items & Action Items",
+      "source": "llm",
+      "llm_method": "enrich_key_questions",
+      "fallback": [],
+      "prompt_addendum": "Write 4-5 discussion items for a portfolio review meeting. Each should be a short paragraph covering: position sizing, new ideas, risk management, or macro hedging."
+    },
+    {
+      "id": "action_items",
+      "title": "Action Items",
+      "source": "static",
+      "table_type": "multi_col",
+      "headers": ["Item", "Owner", "Status", "Due Date"],
+      "blank_rows": 5
+    }
+  ]
+}

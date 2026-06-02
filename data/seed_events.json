@@ -1,0 +1,223 @@
+[
+  {
+    "id": "ev-001",
+    "subject": "AAPL Q1 FY26 Earnings Call",
+    "bodyPreview": "Apple Inc. Q1 FY26 results discussion with CFO. Topics: iPhone revenue, services growth, guidance for Q2.",
+    "start": {"dateTime": "2026-03-03T21:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-03T22:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "ir@apple.com", "address": "ir@apple.com"}},
+    "attendees": [
+      {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+      {"emailAddress": {"name": "Apple IR", "address": "ir@apple.com"}}
+    ],
+    "location": {"displayName": "Webcast"},
+    "isOnlineMeeting": true,
+    "webLink": "https://example.com/aapl"
+  },
+  {
+    "id": "ev-002",
+    "subject": "1:1 with NVDA CEO",
+    "bodyPreview": "Catch-up with Jensen. Strategy, AI capex cycle, supply.",
+    "start": {"dateTime": "2026-03-04T15:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-04T15:30:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [
+      {"emailAddress": {"name": "Me", "address": "me@firm.example"}}
+    ],
+    "location": {"displayName": "Phone"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-003",
+    "subject": "Morgan Stanley TMT Conference 2026",
+    "bodyPreview": "Multi-company conference. 1x1s with AAPL, MSFT, GOOGL, AMZN, META. Theme: AI infrastructure.",
+    "start": {"dateTime": "2026-03-05T13:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-05T22:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Morgan Stanley", "address": "conf@mstanley.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "SF, Moscone West"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-004",
+    "subject": "KOL call: Semiconductor supply chain expert",
+    "bodyPreview": "Former TSMC SVP, 25y experience. Will discuss 3nm yield, CoWoS packaging, customer mix.",
+    "start": {"dateTime": "2026-03-06T14:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-06T15:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Zoom"},
+    "isOnlineMeeting": true,
+    "webLink": ""
+  },
+  {
+    "id": "ev-005",
+    "subject": "Channel check: EMEA distributors (SEMI)",
+    "bodyPreview": "Survey top 5 distributors and 2 resellers on sell-through, lead times, inventory.",
+    "start": {"dateTime": "2026-03-06T09:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-06T11:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Phone block"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-006",
+    "subject": "Portfolio meeting: tech sleeve",
+    "bodyPreview": "Monthly holdings review. NVDA over-weight, SHOP under-weight, AAPL trim debate.",
+    "start": {"dateTime": "2026-03-07T16:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-07T17:30:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Conf room A"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-007",
+    "subject": "Internal review: coverage universe",
+    "bodyPreview": "Quarterly review of coverage. 47 names, 12 active Buys, 18 Holds, 17 Sells.",
+    "start": {"dateTime": "2026-03-07T13:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-07T14:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Conf room B"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-008",
+    "subject": "Analyst meeting: Wells Fargo semis team",
+    "bodyPreview": "Catch-up with senior analyst, 12y coverage. Discuss NVDA, AMD, MRVL, AVGO.",
+    "start": {"dateTime": "2026-03-08T19:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-03-08T20:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Zoom"},
+    "isOnlineMeeting": true,
+    "webLink": ""
+  },
+  {
+    "id": "AAPL-10Q-Q2FY26",
+    "subject": "AAPL — 10-Q (filing)",
+    "bodyPreview": "Apple Inc. Q2 FY2026 10-Q filing — period ended 2026-03-28, filed 2026-05-01. CIK 0000320193, accession 0000320193-26-000013.",
+    "start": {"dateTime": "2026-05-01T09:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-05-01T10:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "SEC EDGAR", "address": "edgar@sec.gov"}},
+    "attendees": [],
+    "location": {"displayName": "EDGAR / aapl-20260328.htm"},
+    "isOnlineMeeting": false,
+    "webLink": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000013/aapl-20260328.htm",
+    "_ticker": "AAPL",
+    "_cik": "0000320193",
+    "_form": "10-Q",
+    "_accession": "0000320193-26-000013",
+    "_filingDate": "2026-05-01",
+    "_company": "Apple Inc.",
+    "_items": ""
+  },
+  {
+    "id": "ev-009",
+    "subject": "ORCL Q4 FY26 Earnings Call",
+    "bodyPreview": "Oracle Corp Q4 FY26 results discussion with CFO. Topics: cloud revenue growth, AI bookings, guidance for FY27. Revenue beat expectations with strong cloud infrastructure demand.",
+    "start": {"dateTime": "2026-06-02T21:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-02T22:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "ir@oracle.com", "address": "ir@oracle.com"}},
+    "attendees": [
+      {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+      {"emailAddress": {"name": "Oracle IR", "address": "ir@oracle.com"}}
+    ],
+    "location": {"displayName": "Webcast"},
+    "isOnlineMeeting": true,
+    "webLink": "https://example.com/orcl"
+  },
+  {
+    "id": "ev-010",
+    "subject": "1:1 with AMD CEO",
+    "bodyPreview": "Strategy session with Lisa Su. Topics: data centre GPU ramp, MI400 series timeline, competitive positioning vs NVDA, supply chain expansion plans.",
+    "start": {"dateTime": "2026-06-03T15:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-03T15:30:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [
+      {"emailAddress": {"name": "Me", "address": "me@firm.example"}}
+    ],
+    "location": {"displayName": "Phone"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-011",
+    "subject": "Goldman Sachs Tech Conference 2026",
+    "bodyPreview": "Multi-company tech conference. 1x1s with CRM, UBER, SNOW, PLTR. Theme: enterprise software AI monetisation and cloud migration trends.",
+    "start": {"dateTime": "2026-06-03T13:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-03T22:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Goldman Sachs", "address": "conf@gs.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "NYC, GS Auditorium"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-012",
+    "subject": "KOL call: EV battery supply chain expert",
+    "bodyPreview": "Former CATL VP, 18y experience. Will discuss solid-state battery roadmap, lithium pricing, OEM sourcing strategies for TSLA, RIVN, F.",
+    "start": {"dateTime": "2026-06-04T14:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-04T15:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Zoom"},
+    "isOnlineMeeting": true,
+    "webLink": ""
+  },
+  {
+    "id": "ev-013",
+    "subject": "Channel check: APAC electronics distributors (TSLA, RIVN)",
+    "bodyPreview": "Survey top 8 distributors and 3 resellers on EV component sell-through, battery cell lead times, charging infrastructure inventory levels.",
+    "start": {"dateTime": "2026-06-04T09:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-04T11:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Phone block"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-014",
+    "subject": "Portfolio meeting: energy sleeve",
+    "bodyPreview": "Monthly holdings review. XOM over-weight, CVX neutral, COP under-weight, SLB trim debate. OPEC+ supply decision impact discussion.",
+    "start": {"dateTime": "2026-06-05T16:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-05T17:30:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Conf room A"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-015",
+    "subject": "Internal review: Q2 coverage retro",
+    "bodyPreview": "Quarterly review of coverage performance. 38 names, 9 active Buys, 16 Holds, 13 Sells. Postmortem on CRM upgrade timing and SNOW downgrade.",
+    "start": {"dateTime": "2026-06-05T13:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-05T14:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Conf room B"},
+    "isOnlineMeeting": false,
+    "webLink": ""
+  },
+  {
+    "id": "ev-016",
+    "subject": "Analyst meeting: Morgan Stanley software team",
+    "bodyPreview": "Catch-up with senior analyst, 10y coverage. Discuss CRM, SNOW, PLTR, NOW valuation multiples and AI product roadmaps.",
+    "start": {"dateTime": "2026-06-05T19:00:00Z", "timeZone": "UTC"},
+    "end": {"dateTime": "2026-06-05T20:00:00Z", "timeZone": "UTC"},
+    "organizer": {"emailAddress": {"name": "Me", "address": "me@firm.example"}},
+    "attendees": [{"emailAddress": {"name": "Me", "address": "me@firm.example"}}],
+    "location": {"displayName": "Zoom"},
+    "isOnlineMeeting": true,
+    "webLink": ""
+  }
+]

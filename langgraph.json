@@ -1,0 +1,12 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "graphs": {
+    "orchestrator": {
+      "path": "./src/calorch/graph.py:make_graph",
+      "description": "Calendar-driven intelligent workflow orchestrator (Option C architecture)."
+    }
+  },
+  "env": "./.env",
+  "python_version": "3.11",
+  "dependencies": ["."]
+}

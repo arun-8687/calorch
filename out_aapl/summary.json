@@ -1,0 +1,71 @@
+{
+  "run_id": "demo-111712",
+  "window": [
+    "2026-05-01T00:00:00+00:00",
+    "2026-05-02T00:00:00+00:00"
+  ],
+  "events": [
+    {
+      "id": "AAPL-10Q-Q2FY26",
+      "subject": "AAPL \u2014 10-Q (filing)",
+      "body_preview": "Apple Inc. Q2 FY2026 10-Q filing \u2014 period ended 2026-03-28, filed 2026-05-01. CIK 0000320193, accession 0000320193-26-000013.",
+      "start": "2026-05-01T09:00:00Z",
+      "end": "2026-05-01T10:00:00Z",
+      "organizer": "SEC EDGAR",
+      "attendees": [],
+      "location": "EDGAR / aapl-20260328.htm",
+      "is_online": false,
+      "web_link": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000013/aapl-20260328.htm",
+      "sec_ticker": "AAPL",
+      "sec_cik": "0000320193",
+      "sec_form": "10-Q",
+      "sec_accession": "0000320193-26-000013",
+      "sec_filing_date": "2026-05-01",
+      "sec_company": "Apple Inc.",
+      "sec_items": ""
+    }
+  ],
+  "classifications": {
+    "AAPL-10Q-Q2FY26": {
+      "event_id": "AAPL-10Q-Q2FY26",
+      "pass1_label": "earnings_call",
+      "pass1_keyword_hits": 10,
+      "final_label": "earnings_call",
+      "confidence": 0.95,
+      "rationale": "SEC form 10-Q \u2192 earnings_call (trusted)",
+      "routed_node": "earnings_call"
+    }
+  },
+  "documents": {
+    "AAPL-10Q-Q2FY26": {
+      "event_id": "AAPL-10Q-Q2FY26",
+      "path": "C:\\workspace\\calorch\\out_aapl\\runs\\demo-111712\\docs\\AAPL-10Q-Q2FY26.docx",
+      "sha256": "ae4cfd286486ad38761f9893f5d3fe5cd74168d7a443ef92f830ac033dbe3810",
+      "bytes": 38452
+    }
+  },
+  "emails": {
+    "AAPL-10Q-Q2FY26": {
+      "event_id": "AAPL-10Q-Q2FY26",
+      "to": [
+        "research@firm.example"
+      ],
+      "subject": "[Earnings Call] AAPL \u2014 10-Q (filing)",
+      "html_path": "C:\\workspace\\calorch\\out_aapl\\runs\\demo-111712\\emails\\AAPL-10Q-Q2FY26.html",
+      "attachment_path": "C:\\workspace\\calorch\\out_aapl\\runs\\demo-111712\\docs\\AAPL-10Q-Q2FY26.docx",
+      "status": "draft",
+      "graph_message_id": "draft:dfe19c9a10244c4b86599adb591f3b43"
+    }
+  },
+  "followups": [
+    {
+      "event_id": "AAPL-10Q-Q2FY26",
+      "action": "Send updated model after print",
+      "owner": "research-analyst",
+      "due": "2026-05-03T10:00:00Z",
+      "notes": "Auto-created from earnings_call workflow"
+    }
+  ],
+  "errors": [],
+  "weekly_briefing_path": "C:\\workspace\\calorch\\out_aapl\\briefings\\weekly.html"
+}

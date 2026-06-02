@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "event_type": "internal_review",
+  "report_header": {
+    "title": "INTERNAL REVIEW",
+    "meeting": "{review_type}",
+    "date": "{event_date} | {event_time}"
+  },
+  "sections": [
+    {
+      "id": "executive_summary",
+      "title": "Executive Summary",
+      "source": "llm",
+      "llm_method": "enrich_headline",
+      "fallback": ["Internal review — coverage universe and research process."],
+      "prompt_addendum": "Write 3-4 bullet points summarising the internal review. Focus on coverage performance, process improvements, and resource allocation. Be concise."
+    },
+    {
+      "id": "coverage_universe",
+      "title": "Coverage Universe",
+      "source": "data",
+      "table_type": "two_col",
+      "rows": [
+        {"label": "Total Names", "value": "{total_names}"},
+        {"label": "Active Buys", "value": "{active_buys}"},
+        {"label": "Active Holds", "value": "{active_holds}"},
+        {"label": "Active Sells", "value": "{active_sells}"},
+        {"label": "Coverage Ratio", "value": "{coverage_ratio}"}
+      ]
+    },
+    {
+      "id": "research_activity",
+      "title": "Research Activity",
+      "source": "data",
+      "table_type": "two_col",
+      "rows": [
+        {"label": "Initiations", "value": "{initiations}"},
+        {"label": "Updates", "value": "{updates}"},
+        {"label": "Deep Dives", "value": "{deep_dives}"},
+        {"label": "Channel Checks", "value": "{channel_checks}"},
+        {"label": "KOL Calls", "value": "{kol_calls}"}
+      ]
+    },
+    {
+      "id": "performance_review",
+      "title": "Performance Review",
+      "source": "llm",
+      "llm_method": "enrich_guidance",
+      "fallback": ["Review of coverage performance vs benchmarks."],
+      "prompt_addendum": "Write a concise paragraph (4-5 sentences) reviewing research team performance. Cover: hit rate, notable calls, and areas for improvement."
+    },
+    {
+      "id": "key_questions",
+      "title": "Key Questions",
+      "source": "llm",
+      "llm_method": "enrich_key_questions",
+      "fallback": ["Which coverage gaps to fill?", "What process improvements to implement?"],
+      "prompt_addendum": "Write 4-5 questions for the internal review. Focus on: coverage gaps, process improvements, resource allocation, and team development."
+    },
+    {
+      "id": "risk_factors",
+      "title": "Risk Factors to Monitor",
+      "source": "llm",
+      "llm_method": "enrich_risk_factors",
+      "fallback": ["Coverage quality", "Resource allocation", "Timeline slippage."],
+      "prompt_addendum": "Write 3 bullet points on internal process risks. Be specific."
+    },
+    {
+      "id": "outstanding_items",
+      "title": "Outstanding Items",
+      "source": "static",
+      "table_type": "multi_col",
+      "headers": ["Item", "Owner", "Due Date", "Status"],
+      "blank_rows": 5
+    }
+  ]
+}
