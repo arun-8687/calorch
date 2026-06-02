@@ -417,6 +417,105 @@ class SecIxbrlClient:
         return []
 
 
-# ---------------------------------------------------------------------------
-# Stub — returns hand-curated 2026 segment splits for the demo watchlist.
-# ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Company Facts — consolidated fundamentals (free, no iXBRL parse)
+    # ------------------------------------------------------------------
+    _CF_CACHE: dict[str, dict[str, Any]] = {}
+
+    def _fetch_companyfacts(self, cik: str) -> dict[str, Any]:
+        if cik in self._CF_CACHE:
+            return self._CF_CACHE[cik]
+        url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+        self._rate_limit()
+        try:
+            resp = httpx.get(url, headers={"User-Agent": self._ua}, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            self._CF_CACHE[cik] = data
+            return data
+        except Exception:
+            return {}
+
+    def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+        """Return key financial metrics from SEC companyfacts for latest quarter."""
+        cf = self._fetch_companyfacts(cik)
+        facts = cf.get("facts", {}).get("us-gaap", {})
+        if not facts:
+            return {"source": "sec-ixbrl", "ticker": ticker, "note": "no us-gaap facts"}
+
+        result: dict[str, Any] = {"source": "sec-ixbrl", "ticker": ticker, "cik": cik}
+
+        _MAP: dict[str, tuple[str, str]] = {
+            "revenue":          ("Revenues", "USD"),
+            "gross_profit":     ("GrossProfit", "USD"),
+            "operating_income": ("OperatingIncomeLoss", "USD"),
+            "net_income":       ("NetIncomeLoss", "USD"),
+            "eps_diluted":      ("EarningsPerShareDiluted", "USD/shares"),
+            "total_assets":     ("Assets", "USD"),
+            "total_liabilities":("Liabilities", "USD"),
+            "equity":           ("StockholdersEquity", "USD"),
+            "cash":             ("CashAndCashEquivalentsAtCarryingValue", "USD"),
+            "long_term_debt":   ("LongTermDebt", "USD"),
+            "capex":            ("PaymentsToAcquirePropertyPlantAndEquipment", "USD"),
+            "rd_expense":       ("ResearchAndDevelopmentExpense", "USD"),
+            "shares_out":       ("CommonStockSharesOutstanding", "shares"),
+            "inventory":        ("InventoryNet", "USD"),
+            "receivables":      ("AccountsReceivableNetCurrent", "USD"),
+        }
+
+        for key, (concept, unit) in _MAP.items():
+            result[key] = None
+            result[f"{key}_period"] = None
+            result[f"{key}_form"] = None
+            entries = facts.get(concept, {}).get("units", {}).get(unit, [])
+            if not entries:
+                continue
+            ranked = sorted(
+                entries,
+                key=lambda e: (
+                    e.get("end", ""),
+                    0 if e.get("frame") is None else 1,
+                    0 if e.get("form") == "10-Q" else 1,
+                ),
+                reverse=(True, False, False),
+            )
+            if not ranked:
+                continue
+            best = ranked[0]
+            result[key] = best.get("val")
+            result[f"{key}_period"] = (best.get("end", "") or "")[:10]
+            result[f"{key}_form"] = best.get("form", "")
+
+        # Derived metrics
+        rev = result.get("revenue")
+        if rev and rev > 0:
+            if result.get("gross_profit"):
+                result["gross_margin"] = round(result["gross_profit"] / rev * 100, 1)
+            if result.get("operating_income"):
+                result["operating_margin"] = round(result["operating_income"] / rev * 100, 1)
+            if result.get("net_income"):
+                result["net_margin"] = round(result["net_income"] / rev * 100, 1)
+
+        eq = result.get("equity")
+        assets = result.get("total_assets")
+        ni = result.get("net_income")
+        if eq and eq != 0 and ni:
+            result["roe"] = round(ni / eq * 100, 1)
+        if assets and assets != 0 and ni:
+            result["roa"] = round(ni / assets * 100, 1)
+
+        cash_v = result.get("cash")
+        debt_v = result.get("long_term_debt")
+        if cash_v is not None and debt_v is not None:
+            result["net_debt"] = debt_v - cash_v
+        if debt_v and eq and eq != 0:
+            result["debt_equity"] = round(debt_v / eq, 2)
+
+        # Company name from DEI taxonomy
+        dei = cf.get("facts", {}).get("dei", {})
+        erc = dei.get("EntityRegistrantName", {}).get("units", {}).get("text", [])
+        if erc:
+            result["company_name"] = erc[-1].get("val", ticker)
+
+        result["as_of"] = result.get("revenue_period", "")
+        return result

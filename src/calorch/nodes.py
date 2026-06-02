@@ -377,10 +377,8 @@ def prepare_event(payload: dict[str, Any], config: Optional[RunnableConfig] = No
         errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
 
     # --- 2) analysis & DOCX ---
+    analysis = None
     try:
-        # Wire providers + cik_lookup for free-source enrichment (macro
-        # box, segment table, EFTS guidance excerpts). Both are optional;
-        # if absent, the build_analysis signature still works.
         analysis = build_analysis(
             cls.final_label, ev, cls, ed, c.llm,
             providers=c.providers, cik_lookup=c.cik_lookup,
@@ -414,10 +412,9 @@ def prepare_event(payload: dict[str, Any], config: Optional[RunnableConfig] = No
     sec_link = ev.web_link or None
 
     # --- 4) HTML email preview ---
-    # Reuse the analysis object from step 2 so approval sees the exact content
-    # that the delivery branch will use.
     try:
-        analysis.confidence = cls.confidence
+        if analysis is None:
+            raise RuntimeError("analysis not generated — skipping email preview")
         # Prefer the EDGAR web link over the local OneDrive URL for SEC events
         link_for_email = sec_link or onedrive_url
         link_label = "View filing on EDGAR" if sec_link and not onedrive_url else "Open DOCX"

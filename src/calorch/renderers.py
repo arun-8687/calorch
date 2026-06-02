@@ -357,11 +357,12 @@ def _build_ticker_context(
     event_id: str = "",
     event_subject: str = "",
     event_date: str = "",
+    cik: str = "",
 ) -> dict[str, Any]:
     """Build a template context dict from live provider data for one ticker.
 
+    Priority: SEC iXBRL fundamentals > Tiingo consensus > empty ("—").
     Returns formatted strings ready for template variable substitution.
-    When a provider returns empty/missing data, values are "—".
     """
     price_data = providers.price.quote(ticker) if providers else None
     consensus = providers.consensus.estimates(ticker) if providers else None
@@ -373,41 +374,58 @@ def _build_ticker_context(
         consensus.setdefault("price", price_data.get("price"))
         consensus.setdefault("market_cap", price_data.get("market_cap"))
 
+    # SEC iXBRL fundamentals — primary source for financial data
+    funds = {}
+    if providers and cik:
+        try:
+            funds = providers.fundamentals.latest_fundamentals(cik, ticker) or {}
+        except Exception:
+            pass
+
     p = price_data or {}
     c = consensus
+    f = funds
+
+    # Merge: SEC iXBRL preferred, fall back to Tiingo consensus, then "—"
+    def _get(*keys: str, fmt_fn=None):
+        for k in keys:
+            v = f.get(k) or c.get(k)
+            if v is not None:
+                return fmt_fn(v) if fmt_fn else v
+        return "—"
 
     return {
         "event_id": event_id,
         "primary_ticker": ticker,
-        "company_name": c.get("company", ticker),
+        "company_name": f.get("company_name") or c.get("company", ticker),
         "price": _fmt_price(p.get("price")),
         "market_cap": _fmt_b(p.get("market_cap")),
         "sector": p.get("sector") or "Technology",
         "ceo_name": p.get("ceo_name") or "—",
         "employees": str(p.get("employees") or "—"),
-        "consensus_rating": str(c.get("consensus_rating", "—")),
+        "consensus_rating": str(c.get("consensus_rating", _get("consensus_rating") or "—")),
         "mean_target": _fmt_price(c.get("mean_target")),
         "upside_pct": "—",
-        "last_quarter_label": "Q4 FY2025",
-        "rev_actual": _fmt_b(c.get("rev_actual_q1")) or _fmt_b(c.get("rev_q")),
-        "eps_actual": _fmt_price(c.get("eps_actual_q1")) or _fmt_price(c.get("eps_q")),
-        "net_income": "—",
-        "operating_income": "—",
-        "gross_margin": _fmt_pct(c.get("gross_margin")),
-        "operating_margin": _fmt_pct(c.get("operating_margin")),
-        "net_margin": _fmt_pct(c.get("net_margin")),
-        "roe": _fmt_pct(c.get("roe")),
-        "roa": _fmt_pct(c.get("roa")),
+        "last_quarter_label": "Q1 FY2026",
+        "rev_actual": _get("revenue", fmt_fn=_fmt_b),
+        "eps_actual": _get("eps_diluted", fmt_fn=_fmt_price),
+        "net_income": _get("net_income", fmt_fn=_fmt_b),
+        "operating_income": _get("operating_income", fmt_fn=_fmt_b),
+        "gross_margin": _get("gross_margin", fmt_fn=_fmt_pct),
+        "operating_margin": _get("operating_margin", fmt_fn=_fmt_pct),
+        "net_margin": _get("net_margin", fmt_fn=_fmt_pct),
+        "roe": _get("roe", fmt_fn=_fmt_pct),
+        "roa": _get("roa", fmt_fn=_fmt_pct),
         "pe_ttm": _fmt_x(c.get("pe_ttm")),
         "forward_pe": _fmt_x(c.get("forward_pe")),
         "ev_ebitda": _fmt_x(c.get("ev_ebitda")),
         "price_sales": _fmt_x(c.get("price_sales")),
         "price_book": _fmt_x(c.get("price_book")),
-        "cash": _fmt_b(c.get("cash")),
-        "total_debt": _fmt_b(c.get("total_debt")),
-        "net_debt": _fmt_b(c.get("net_debt")),
-        "debt_equity": _fmt_x(c.get("debt_equity")),
-        "current_ratio": f"{c.get('current_ratio', 0):.2f}" if c.get('current_ratio') else "—",
+        "cash": _get("cash", fmt_fn=_fmt_b),
+        "total_debt": _get("long_term_debt", fmt_fn=_fmt_b),
+        "net_debt": _get("net_debt", fmt_fn=_fmt_b),
+        "debt_equity": _get("debt_equity", fmt_fn=_fmt_x),
+        "current_ratio": _get("current_ratio", fmt_fn=lambda v: f"{v:.2f}"),
         "buy": str(c.get("buy", "—")),
         "hold": str(c.get("hold", "—")),
         "sell": str(c.get("sell", "—")),
@@ -422,14 +440,6 @@ def _build_ticker_context(
         "event_date": event_date,
         "event_time": "09:00 AM IST",
         "conference_name": event_subject,
-        "board_independence": "—",
-        "exec_comp": "—",
-        "esg_focus": "—",
-        "esg_key_metric": "—",
-        "esg_score": "—",
-        "esg_env": "—",
-        "esg_social": "—",
-        "esg_gov": "—",
         "confidence": 0.0,
         "tickers": [ticker],
     }
@@ -766,6 +776,7 @@ def _build_management_meeting(ev, cls, ed, llm_call, *, providers=None, cik_look
         event_id=ev.id,
         event_subject=ev.subject,
         event_date=str(ev.start)[:10] if hasattr(ev, "start") else "",
+        cik=cik or "",
     )
     ctx.update({
         "role": role,
@@ -795,6 +806,7 @@ def _build_conference(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None)
     a_base = _base(f"Conference Brief — {ev.subject}", ev, cls, ed)
     tickers = a_base.tickers or ["AAPL", "MSFT", "NVDA"]
     primary_ticker = tickers[0]
+    cik = cik_lookup(primary_ticker) if cik_lookup and primary_ticker else ""
     macro = _enrich_macro(providers)
 
     data_tables: dict[str, Any] = {}
@@ -810,6 +822,7 @@ def _build_conference(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None)
         event_id=ev.id,
         event_subject=ev.subject,
         event_date=str(ev.start)[:10] if hasattr(ev, "start") else "",
+        cik=cik or "",
     )
     ctx.update({
         "conference_name": ev.subject,
@@ -856,6 +869,7 @@ def _build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=No
 
     a_base = _base(f"Channel Check — {ev.subject}", ev, cls, ed)
     primary_ticker = (a_base.tickers or [None])[0]
+    cik = cik_lookup(primary_ticker) if cik_lookup and primary_ticker else ""
     macro = _enrich_macro(providers)
 
     data_tables: dict[str, Any] = {}
@@ -871,6 +885,7 @@ def _build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=No
         event_id=ev.id,
         event_subject=ev.subject,
         event_date=str(ev.start)[:10] if hasattr(ev, "start") else "",
+        cik=cik or "",
     )
     ctx.update({
         "sector": "Consumer Electronics / Technology",
@@ -1033,6 +1048,7 @@ def _build_analyst_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=
 
     a_base = _base(f"Analyst Meeting — {ev.subject}", ev, cls, ed)
     primary_ticker = (a_base.tickers or [None])[0]
+    cik = cik_lookup(primary_ticker) if cik_lookup and primary_ticker else ""
 
     ctx = _build_ticker_context(
         ticker=primary_ticker or "",
@@ -1040,6 +1056,7 @@ def _build_analyst_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=
         event_id=ev.id,
         event_subject=ev.subject,
         event_date=str(ev.start)[:10] if hasattr(ev, "start") else "",
+        cik=cik or "",
     )
     ctx.update({
         "event_time": "7:00 PM IST",

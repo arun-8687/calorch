@@ -48,6 +48,11 @@ class SegmentProvider(Protocol):
 
 
 @runtime_checkable
+class FundamentalsProvider(Protocol):
+    def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]: ...
+
+
+@runtime_checkable
 class NarrativeProvider(Protocol):
     def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
 
@@ -59,6 +64,7 @@ class NarrativeProvider(Protocol):
 class ProviderBundle:
     price: PriceProvider
     consensus: ConsensusProvider
+    fundamentals: FundamentalsProvider
     macro: MacroProvider
     segments: SegmentProvider
     narrative: NarrativeProvider
@@ -197,6 +203,21 @@ class IxbrlSegmentProvider:
         return []
 
 
+class IxbrlFundamentalsProvider:
+    """Live SEC iXBRL fundamentals — income statement, balance sheet, cash flow."""
+
+    def __init__(self, ixbrl: Any) -> None:
+        self._ixbrl = ixbrl
+
+    def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+        if self._ixbrl is None:
+            return {"source": "sec-ixbrl", "ticker": ticker, "note": "iXBRL client not available"}
+        try:
+            return self._ixbrl.latest_fundamentals(cik, ticker)
+        except Exception as e:
+            return {"source": "sec-ixbrl", "ticker": ticker, "note": str(e)}
+
+
 @dataclass
 class EftsNarrativeProvider:
     """Live SEC EFTS narrative excerpts."""
@@ -263,6 +284,12 @@ def build_providers(settings: Any) -> ProviderBundle:
 
     segments = IxbrlSegmentProvider(ixbrl=ixbrl)
 
+    # ---- Fundamentals: SEC iXBRL (same client, different method) ----------
+    fundamentals = IxbrlFundamentalsProvider(ixbrl=ixbrl)
+    if getattr(settings, "use_ixbrl_segments", True):
+        sources.append({"source_name": "SEC iXBRL Fundamentals", "status": "active",
+                        "detail": "Revenue, EPS, margins, balance sheet, cash flow"})
+
     # ---- Narrative: SEC EFTS ----
     efts = None
     if getattr(settings, "use_sec_efts", True):
@@ -291,6 +318,7 @@ def build_providers(settings: Any) -> ProviderBundle:
     return ProviderBundle(
         price=price,
         consensus=consensus,
+        fundamentals=fundamentals,
         macro=macro,
         segments=segments,
         narrative=narrative,
