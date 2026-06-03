@@ -19,6 +19,8 @@ from urllib.parse import urlencode
 
 import httpx
 
+from calorch.http_client import get_client
+
 
 EFTS_BASE = "https://efts.sec.gov/LATEST/search-index"
 
@@ -122,8 +124,8 @@ class SecEftsClient:
                 self._rate_limit()
                 url = f"{EFTS_BASE}?{urlencode(per_params)}"
                 try:
-                    r = httpx.get(url, headers={"User-Agent": self._ua}, timeout=30.0)
-                    r.raise_for_status()
+                    client = get_client()
+                    r = client.get(url, headers={"User-Agent": self._ua}, service="sec_efts")
                 except httpx.HTTPError:
                     continue
                 try:

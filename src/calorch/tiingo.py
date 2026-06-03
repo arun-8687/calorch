@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from calorch.http_client import get_client
 
 TIINGO_API = "https://api.tiingo.com"
 
@@ -47,7 +48,8 @@ class TiingoClient:
     def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self._rate_limit()
         url = f"{TIINGO_API}{endpoint}"
-        r = httpx.get(url, headers=self._headers(), params=params or {}, timeout=30.0)
+        client = get_client()
+        r = client.get(url, headers=self._headers(), params=params or {}, timeout=30.0)
         r.raise_for_status()
         return r.json()
 

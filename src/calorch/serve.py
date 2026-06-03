@@ -2,10 +2,12 @@
 
 Exposes:
   GET  /health         — liveness probe
+  GET  /ready          — readiness probe (checks all dependencies)
   POST /run            — start a new orchestrator run
   GET  /runs/{id}      — fetch run state
   POST /runs/{id}/approval — approve or reject a paused send run
   GET  /briefing       — list recent briefings
+  GET  /metrics        — HTTP client metrics
 
 In production, every POST /run creates a LangGraph thread. Configure
 ``CHECKPOINT_POSTGRES_URI`` so approval checkpoints survive process restarts.
@@ -16,19 +18,21 @@ import json
 import hmac
 import logging
 import os
+import signal
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from calorch.config import get_settings
 from calorch.graph import make_graph
+from calorch.http_client import close_client, get_metrics
 from calorch.llm import get_chat_model
 from calorch.nodes import Context, set_context
 from calorch.state import OrchestratorState
@@ -44,6 +48,7 @@ from calorch.tools import (
 log = logging.getLogger("calorch.serve")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     _startup()
@@ -54,6 +59,22 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="calorch", version="0.1.0", lifespan=_lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Security middleware
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def _security_headers(request: Request, call_next) -> Response:
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -110,13 +131,38 @@ def _startup() -> None:
     _CTX = _build_context()
     _CHECKPOINTER, _CHECKPOINTER_CM = _build_checkpointer()
     _GRAPH = make_graph(checkpointer=_CHECKPOINTER)
+    _install_signal_handlers()
     log.info("calorch ready — mocks=%s repo=%s",
              get_settings().use_mocks, get_settings().repo_backend)
 
 
 def _shutdown() -> None:
+    """Clean up resources on shutdown."""
     if _CHECKPOINTER_CM is not None:
         _CHECKPOINTER_CM.__exit__(None, None, None)
+    # Close shared HTTP client to release connection pool
+    try:
+        close_client()
+        log.info("HTTP client closed")
+    except Exception as e:
+        log.warning("Error closing HTTP client: %s", e)
+
+
+def _install_signal_handlers() -> None:
+    """Install graceful shutdown handlers for SIGTERM/SIGINT."""
+    def _handler(signum, frame):
+        log.info("Received signal %s, initiating graceful shutdown", signum)
+        _shutdown()
+        import sys
+        sys.exit(0)
+    
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+        signal.signal(signal.SIGINT, _handler)
+        log.debug("Signal handlers installed for graceful shutdown")
+    except (ValueError, OSError):
+        # Not on main thread or unsupported platform
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +209,30 @@ def _require_api_key(
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Liveness probe — process is alive."""
     return {"status": "ok", "ts": datetime.now(tz=timezone.utc).isoformat()}
+
+
+@app.get("/ready")
+def ready() -> dict[str, Any]:
+    """Readiness probe — all dependencies are initialized."""
+    checks = {
+        "graph": _GRAPH is not None,
+        "context": _CTX is not None,
+        "checkpointer": _CHECKPOINTER is not None,
+    }
+    ready_flag = all(checks.values())
+    return {
+        "status": "ready" if ready_flag else "not_ready",
+        "checks": checks,
+        "ts": datetime.now(tz=timezone.utc).isoformat(),
+    }
+
+
+@app.get("/metrics", dependencies=[Depends(_require_api_key)])
+def metrics() -> dict[str, Any]:
+    """HTTP client metrics — request count, latency, error rate per service."""
+    return get_metrics().get_stats()
 
 
 @app.post("/run", response_model=RunResponse, dependencies=[Depends(_require_api_key)])

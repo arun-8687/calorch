@@ -29,6 +29,8 @@ from typing import Any
 
 import httpx
 
+from calorch.http_client import get_client
+
 
 FRED_API = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -96,8 +98,8 @@ class FredClient:
         if self._key:
             params["api_key"] = self._key
 
-        r = httpx.get(FRED_API, params=params, timeout=self._timeout)
-        r.raise_for_status()
+        client = get_client()
+        r = client.get(FRED_API, params=params, service="fred")
         payload = r.json()
         if "observations" not in payload:
             # FRED returns 200 with an error JSON when no key

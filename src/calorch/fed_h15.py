@@ -23,6 +23,8 @@ from typing import Any
 
 import httpx
 
+from calorch.http_client import get_client
+
 
 H15_CSV_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H15&series=bf17364827e38702b42a58cf8eaa3f78&lastobs=&from=&to=&filetype=csv&label=include&layout=seriescolumn"
 
@@ -83,7 +85,8 @@ class FedH15Client:
         if cache.exists() and (datetime.now() - datetime.fromtimestamp(cache.stat().st_mtime)) < timedelta(hours=24):
             text = cache.read_text(encoding="utf-8")
         else:
-            r = httpx.get(H15_CSV_URL, timeout=self._timeout, follow_redirects=True)
+            client = get_client()
+            r = client.get(H15_CSV_URL, timeout=self._timeout, follow_redirects=True)
             r.raise_for_status()
             text = r.text
             cache.write_text(text, encoding="utf-8")

@@ -29,6 +29,8 @@ from typing import Any, Iterable
 import httpx
 from lxml import etree
 
+from calorch.http_client import get_client
+
 
 XBRL_NS = "http://www.xbrl.org/2003/instance"
 XBRLI_NS = "http://www.xbrl.org/2003/instance"
@@ -150,10 +152,15 @@ class SecIxbrlClient:
         self._last_req = time.monotonic()
 
     def _get(self, url: str) -> bytes:
+        """Fetch URL with rate limiting, using shared HTTP client with retry/pooling."""
         self._rate_limit()
-        r = httpx.get(url, headers={"User-Agent": self._ua, "Accept-Encoding": "gzip"}, timeout=60.0)
-        r.raise_for_status()
-        return r.content
+        client = get_client()
+        response = client.get(
+            url,
+            headers={"User-Agent": self._ua, "Accept-Encoding": "gzip"},
+            service="sec_ixbrl",
+        )
+        return response.content
 
     def find_latest_filing(
         self,

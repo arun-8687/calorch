@@ -45,13 +45,14 @@ def test_fed_h15_parse_skips_junk_header():
 # ---------------------------------------------------------------------------
 def test_fred_client_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """The cache should short-circuit a second call within the TTL window."""
+    from unittest.mock import MagicMock
+    
     calls = []
-
-    def fake_get(url, params, timeout):
-        from unittest.mock import MagicMock
-        calls.append(params.get("series_id"))
+    
+    def fake_get(url, **kwargs):
+        calls.append(kwargs.get("params", {}).get("series_id"))
         m = MagicMock()
-        m.raise_for_status = lambda: None
+        m.status_code = 200
         m.json = lambda: {
             "observations": [
                 {"date": "2026-05-30", "value": "5.33",
@@ -61,8 +62,11 @@ def test_fred_client_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             ]
         }
         return m
-
-    monkeypatch.setattr("httpx.get", fake_get)
+    
+    fake_client = MagicMock()
+    fake_client.get = fake_get
+    
+    monkeypatch.setattr("calorch.fred.get_client", lambda: fake_client)
     client = FredClient(api_key=None, cache_dir=tmp_path)
     pts1 = client.get_series("DFF", start="2026-05-01", end="2026-05-30")
     pts2 = client.get_series("DFF", start="2026-05-01", end="2026-05-30")
@@ -75,10 +79,11 @@ def test_fred_client_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_fred_client_handles_missing_dot_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """FRED's '.' sentinel for missing observations must be skipped."""
-    def fake_get(url, params, timeout):
-        from unittest.mock import MagicMock
+    from unittest.mock import MagicMock
+    
+    def fake_get(url, **kwargs):
         m = MagicMock()
-        m.raise_for_status = lambda: None
+        m.status_code = 200
         m.json = lambda: {
             "observations": [
                 {"date": "2026-05-30", "value": ".", "realtime_start": "x", "realtime_end": "y"},
@@ -86,8 +91,11 @@ def test_fred_client_handles_missing_dot_value(tmp_path: Path, monkeypatch: pyte
             ]
         }
         return m
-
-    monkeypatch.setattr("httpx.get", fake_get)
+    
+    fake_client = MagicMock()
+    fake_client.get = fake_get
+    
+    monkeypatch.setattr("calorch.fred.get_client", lambda: fake_client)
     client = FredClient(api_key=None, cache_dir=tmp_path)
     pts = client.get_series("DGS10", start="2026-05-01", end="2026-05-30")
     assert len(pts) == 1
