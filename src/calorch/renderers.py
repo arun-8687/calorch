@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import html
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+import httpx
 from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -28,6 +30,8 @@ from docx.oxml import OxmlElement
 from docx.shared import Pt, RGBColor, Inches
 
 from calorch.state import CalendarEvent, ClassificationResult, EventType
+
+log = logging.getLogger("calorch.renderers")
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +384,12 @@ def _build_ticker_context(
     if providers and cik:
         try:
             funds = providers.fundamentals.latest_fundamentals(cik, ticker) or {}
-        except Exception:
-            pass
+        except (KeyError, TypeError, ValueError) as e:
+            # Malformed response from SEC; degrade to "—" fields
+            log.warning("SEC iXBRL fundamentals parse failed for %s: %s", ticker, e)
+        except httpx.HTTPError as e:
+            # Network failure fetching companyfacts; degrade to "—" fields
+            log.warning("SEC iXBRL fetch failed for %s: %s", ticker, e)
 
     p = price_data or {}
     c = consensus
@@ -468,7 +476,11 @@ def _enrich_macro(providers: Any) -> dict[str, dict[str, Any]] | None:
         return None
     try:
         snap = providers.macro.snapshot()
-    except Exception:
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+        log.warning("Macro snapshot failed: %s", e)
+        return None
+    except (KeyError, TypeError, ValueError) as e:
+        log.warning("Macro snapshot returned malformed data: %s", e)
         return None
     return snap or None
 
@@ -478,7 +490,11 @@ def _enrich_segments(providers: Any, cik: str | None, ticker: str | None) -> lis
         return None
     try:
         return providers.segments.latest_segments(cik, ticker, axis="product")
-    except Exception:
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+        log.warning("Segment fetch failed for %s: %s", ticker, e)
+        return None
+    except (KeyError, TypeError, ValueError) as e:
+        log.warning("Segment data malformed for %s: %s", ticker, e)
         return None
 
 
@@ -487,7 +503,11 @@ def _enrich_geo(providers: Any, cik: str | None, ticker: str | None) -> list[dic
         return None
     try:
         return providers.segments.latest_segments(cik, ticker, axis="geographic")
-    except Exception:
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+        log.warning("Geographic fetch failed for %s: %s", ticker, e)
+        return None
+    except (KeyError, TypeError, ValueError) as e:
+        log.warning("Geographic data malformed for %s: %s", ticker, e)
         return None
 
 
@@ -496,7 +516,11 @@ def _enrich_guidance(providers: Any, cik: str | None, ticker: str | None) -> lis
         return None
     try:
         return providers.narrative.guidance_hits(cik, ticker, limit=5)
-    except Exception:
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+        log.warning("Guidance fetch failed for %s: %s", ticker, e)
+        return None
+    except (KeyError, TypeError, ValueError) as e:
+        log.warning("Guidance data malformed for %s: %s", ticker, e)
         return None
 
 
@@ -591,7 +615,12 @@ def _build_earnings_call(ev, cls, ed, llm_call, *, providers=None, cik_lookup=No
     if cik_lookup and primary_ticker:
         try:
             cik = cik_lookup(primary_ticker)
-        except Exception:
+        except (KeyError, ValueError) as e:
+            # CIK lookup table doesn't know this ticker; renderer degrades to None
+            log.debug("CIK lookup miss for %s: %s", primary_ticker, e)
+            cik = None
+        except httpx.HTTPError as e:
+            log.warning("CIK lookup network error for %s: %s", primary_ticker, e)
             cik = None
 
     # ---- fetch all data ----

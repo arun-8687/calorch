@@ -234,38 +234,49 @@ class HttpClient:
         # Execute with retry
         start_time = time.monotonic()
         success = False
-        
-        try:
-            response = self._request_with_retry(method, url, **kwargs)
-            success = True
-            cb.record_success()
-            yield response
-        except Exception as e:
-            cb.record_failure()
-            logger.error(
-                f"HTTP {method} {url} failed: {e}",
-                extra={
-                    "request_id": request_id,
-                    "service": service,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            raise
-        finally:
-            # Record metrics
-            latency_ms = (time.monotonic() - start_time) * 1000
-            _metrics.record_request(service, latency_ms, success)
-            
-            logger.debug(
-                f"HTTP {method} {url} completed in {latency_ms:.1f}ms",
-                extra={
-                    "request_id": request_id,
-                    "service": service,
-                    "latency_ms": latency_ms,
-                    "success": success,
-                },
-            )
+
+        # Wrap the call in an OpenTelemetry span (no-op if OTel not installed)
+        from calorch.telemetry import start_span
+        with start_span(
+            f"calorch.http.{service}",
+            method=method,
+            url=url,
+            request_id=request_id,
+        ) as span:
+            try:
+                response = self._request_with_retry(method, url, **kwargs)
+                success = True
+                cb.record_success()
+                span.set_attribute("http.status_code", response.status_code)
+                yield response
+            except Exception as e:
+                cb.record_failure()
+                span.set_attribute("error", str(e))
+                logger.error(
+                    f"HTTP {method} {url} failed: {e}",
+                    extra={
+                        "request_id": request_id,
+                        "service": service,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                raise
+            finally:
+                # Record metrics
+                latency_ms = (time.monotonic() - start_time) * 1000
+                _metrics.record_request(service, latency_ms, success)
+                span.set_attribute("latency_ms", latency_ms)
+
+                logger.debug(
+                    f"HTTP {method} {url} completed in {latency_ms:.1f}ms",
+                    extra={
+                        "request_id": request_id,
+                        "service": service,
+                        "latency_ms": latency_ms,
+                        "success": success,
+                    },
+                )
     
     def _request_with_retry(
         self,

@@ -19,6 +19,7 @@ Cost: 2-3 MB XML per filing, ~1s parse time. We cache per accession.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -30,6 +31,8 @@ import httpx
 from lxml import etree
 
 from calorch.http_client import get_client
+
+log = logging.getLogger("calorch.sec_ixbrl")
 
 
 XBRL_NS = "http://www.xbrl.org/2003/instance"
@@ -440,7 +443,14 @@ class SecIxbrlClient:
             data = resp.json()
             self._CF_CACHE[cik] = data
             return data
-        except Exception:
+        except httpx.HTTPError as e:
+            # Network/HTTP-level failure — log and return empty so the caller
+            # can degrade gracefully (the renderer will fall back to "—")
+            log.warning("SEC companyfacts fetch failed for CIK %s: %s", cik, e)
+            return {}
+        except (json.JSONDecodeError, ValueError) as e:
+            # SEC returned 200 but the body is not valid JSON
+            log.warning("SEC companyfacts response malformed for CIK %s: %s", cik, e)
             return {}
 
     def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:

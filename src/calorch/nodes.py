@@ -55,6 +55,8 @@ from calorch.tools import (
     to_calendar_event,
 )
 
+from calorch.telemetry import start_span
+
 log = logging.getLogger("calorch.nodes")
 
 
@@ -124,11 +126,17 @@ def scan_calendar(state: OrchestratorState, config: Optional[RunnableConfig] = N
     c = _ctx(config)
     start = state["window_start"]
     end = state["window_end"]
-    log.info("scanning calendar %s → %s", start, end)
-    raw = c.graph.list_events(start, end)
-    events = [to_calendar_event(r) for r in raw]
-    log.info("found %d events", len(events))
-    return {"raw_events": raw, "events": events, "log": [f"scan_calendar: {len(events)} events"]}
+    with start_span(
+        "calorch.node.scan_calendar",
+        window_start=start.isoformat(),
+        window_end=end.isoformat(),
+    ) as span:
+        log.info("scanning calendar %s → %s", start, end)
+        raw = c.graph.list_events(start, end)
+        events = [to_calendar_event(r) for r in raw]
+        log.info("found %d events", len(events))
+        span.set_attribute("event_count", len(events))
+        return {"raw_events": raw, "events": events, "log": [f"scan_calendar: {len(events)} events"]}
 
 
 # ---------------------------------------------------------------------------
@@ -164,41 +172,45 @@ def prefilter_keywords(state: OrchestratorState) -> dict[str, Any]:
     For SEC-sourced events (those carrying ``_form`` in the raw payload),
     the form code itself is the strongest signal, so we use it directly.
     """
-    # Index raw events by id for SEC form lookup
-    raw_by_id: dict[str, dict[str, Any]] = {r["id"]: r for r in state.get("raw_events", [])}
+    with start_span(
+        "calorch.node.prefilter_keywords",
+        event_count=len(state.get("events", [])),
+    ):
+        # Index raw events by id for SEC form lookup
+        raw_by_id: dict[str, dict[str, Any]] = {r["id"]: r for r in state.get("raw_events", [])}
 
-    results: dict[str, ClassificationResult] = {}
-    for ev in state["events"]:
-        raw = raw_by_id.get(ev.id) or {}
-        # ---- SEC fast-path ----
-        sec_form = raw.get("_form")
-        sec_items = raw.get("_items", "")
-        if sec_form:
-            from calorch.sec import classify_form
-            sec_label = classify_form(sec_form, items=sec_items)
-            try:
-                label = EventType(sec_label)
-            except ValueError:
-                label = EventType.UNKNOWN
+        results: dict[str, ClassificationResult] = {}
+        for ev in state["events"]:
+            raw = raw_by_id.get(ev.id) or {}
+            # ---- SEC fast-path ----
+            sec_form = raw.get("_form")
+            sec_items = raw.get("_items", "")
+            if sec_form:
+                from calorch.sec import classify_form
+                sec_label = classify_form(sec_form, items=sec_items)
+                try:
+                    label = EventType(sec_label)
+                except ValueError:
+                    label = EventType.UNKNOWN
+                results[ev.id] = ClassificationResult(
+                    event_id=ev.id,
+                    pass1_label=label,
+                    pass1_keyword_hits=10,  # strong hint
+                    rationale=f"SEC form {sec_form} → {sec_label}",
+                )
+                continue
+            # ---- Outlook / generic fallback ----
+            blob = f"{ev.subject}\n{ev.body_preview}\n{ev.location}".lower()
+            label, hits, _ = _keyword_score(blob)
             results[ev.id] = ClassificationResult(
                 event_id=ev.id,
                 pass1_label=label,
-                pass1_keyword_hits=10,  # strong hint
-                rationale=f"SEC form {sec_form} → {sec_label}",
+                pass1_keyword_hits=hits,
             )
-            continue
-        # ---- Outlook / generic fallback ----
-        blob = f"{ev.subject}\n{ev.body_preview}\n{ev.location}".lower()
-        label, hits, _ = _keyword_score(blob)
-        results[ev.id] = ClassificationResult(
-            event_id=ev.id,
-            pass1_label=label,
-            pass1_keyword_hits=hits,
-        )
-    return {
-        "classifications": results,
-        "log": [f"prefilter_keywords: {len(results)} events scored"],
-    }
+        return {
+            "classifications": results,
+            "log": [f"prefilter_keywords: {len(results)} events scored"],
+        }
 
 
 def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
@@ -211,51 +223,60 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
     """
     c = _ctx(config)
     results: dict[str, ClassificationResult] = dict(state.get("classifications", {}))
-    for ev in state["events"]:
-        prev = results.get(ev.id) or ClassificationResult(event_id=ev.id)
-        # Trust the SEC form hint
-        if prev.pass1_keyword_hits >= 10 and "SEC form" in (prev.rationale or ""):
-            out = ClassificationResult(
-                event_id=ev.id,
-                pass1_label=prev.pass1_label,
-                pass1_keyword_hits=prev.pass1_keyword_hits,
-                final_label=prev.pass1_label,
-                confidence=0.95,
-                rationale=prev.rationale + " (trusted)",
-                routed_node=EVENT_TYPE_TO_NODE[prev.pass1_label],
+    with start_span("calorch.node.llm_classify", event_count=len(state["events"])) as span:
+        for ev in state["events"]:
+            prev = results.get(ev.id) or ClassificationResult(event_id=ev.id)
+            # Trust the SEC form hint
+            if prev.pass1_keyword_hits >= 10 and "SEC form" in (prev.rationale or ""):
+                out = ClassificationResult(
+                    event_id=ev.id,
+                    pass1_label=prev.pass1_label,
+                    pass1_keyword_hits=prev.pass1_keyword_hits,
+                    final_label=prev.pass1_label,
+                    confidence=0.95,
+                    rationale=prev.rationale + " (trusted)",
+                    routed_node=EVENT_TYPE_TO_NODE[prev.pass1_label],
+                )
+                results[ev.id] = out
+                continue
+            blob = f"{ev.subject}\n{ev.body_preview}\nLocation: {ev.location}\n"
+            hint_label = prev.pass1_label.value
+            hint_hits = prev.pass1_keyword_hits
+
+            system = (
+                f"Classify this calendar event into exactly one of these types: "
+                f"earnings_call, management_meeting, conference, kol_meeting, "
+                f"channel_check, portfolio_meeting, internal_review, "
+                f"analyst_meeting, unknown.\n"
+                f"Keyword hint: {hint_label} (hits={hint_hits}).\n"
+                f"Output ONLY a JSON object with fields: final_label (string), "
+                f"confidence (0.0-1.0), rationale (short string).\n"
+                f'Example: {{"final_label": "earnings_call", "confidence": 0.85, "rationale": "contains earnings keywords"}}'
             )
+            user = f"Event:\n{blob}"
+
+            try:
+                with start_span(
+                    "calorch.llm.invoke",
+                    event_id=ev.id,
+                    model=getattr(c.llm, "model_name", "unknown"),
+                ):
+                    from langchain_core.messages import SystemMessage, HumanMessage
+                    resp = c.llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+                text = resp.content if hasattr(resp, "content") else str(resp)
+                out = _parse_classification_json(text, ev.id, prev)
+            except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+                log.warning("llm_classify network failure for %s: %s", ev.id, e)
+                out = _pass1_fallback(ev.id, prev)
+            except (ValueError, TypeError, json.JSONDecodeError) as e:
+                log.warning("llm_classify parse failure for %s: %s", ev.id, e)
+                out = _pass1_fallback(ev.id, prev)
+
+            if not isinstance(out, ClassificationResult):
+                out = ClassificationResult.model_validate({**out, "event_id": ev.id})
+            out.event_id = ev.id
+            out.routed_node = EVENT_TYPE_TO_NODE[out.final_label]
             results[ev.id] = out
-            continue
-        blob = f"{ev.subject}\n{ev.body_preview}\nLocation: {ev.location}\n"
-        hint_label = prev.pass1_label.value
-        hint_hits = prev.pass1_keyword_hits
-
-        system = (
-            f"Classify this calendar event into exactly one of these types: "
-            f"earnings_call, management_meeting, conference, kol_meeting, "
-            f"channel_check, portfolio_meeting, internal_review, "
-            f"analyst_meeting, unknown.\n"
-            f"Keyword hint: {hint_label} (hits={hint_hits}).\n"
-            f"Output ONLY a JSON object with fields: final_label (string), "
-            f"confidence (0.0-1.0), rationale (short string).\n"
-            f'Example: {{"final_label": "earnings_call", "confidence": 0.85, "rationale": "contains earnings keywords"}}'
-        )
-        user = f"Event:\n{blob}"
-
-        try:
-            from langchain_core.messages import SystemMessage, HumanMessage
-            resp = c.llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-            text = resp.content if hasattr(resp, "content") else str(resp)
-            out = _parse_classification_json(text, ev.id, prev)
-        except Exception as e:
-            log.warning("llm_classify failed for %s: %s — using Pass 1", ev.id, e)
-            out = _pass1_fallback(ev.id, prev)
-
-        if not isinstance(out, ClassificationResult):
-            out = ClassificationResult.model_validate({**out, "event_id": ev.id})
-        out.event_id = ev.id
-        out.routed_node = EVENT_TYPE_TO_NODE[out.final_label]
-        results[ev.id] = out
     return {
         "classifications": results,
         "log": [f"llm_classify: classified {len(results)} events"],
@@ -358,6 +379,18 @@ def prepare_event(payload: dict[str, Any], config: Optional[RunnableConfig] = No
     run_name = _safe_artifact_name(str(payload.get("run_id", "run")))
     event_name = _safe_artifact_name(ev.id)
 
+    with start_span(
+        "calorch.node.prepare_event",
+        event_id=ev.id,
+        event_type=cls.final_label.value,
+        confidence=cls.confidence,
+    ) as span:
+        return _prepare_event_inner(
+            c, ev, cls, run_name, event_name, span
+        )
+
+
+def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
     log.info("prepare start event=%s type=%s conf=%.2f", ev.id, cls.final_label.value, cls.confidence)
     errors: list[str] = []
     documents: dict[str, DocxArtifact] = {}
@@ -442,6 +475,9 @@ def prepare_event(payload: dict[str, Any], config: Optional[RunnableConfig] = No
         f"doc={'yes' if ev.id in documents else 'no'} "
         f"preview={'yes' if ev.id in prepared_emails else 'no'}"
     )
+    span.set_attribute("errors", len(errors))
+    span.set_attribute("has_doc", ev.id in documents)
+    span.set_attribute("has_preview", ev.id in prepared_emails)
 
     return {
         "documents": documents,
@@ -459,39 +495,46 @@ def approval_gate(state: OrchestratorState) -> dict[str, Any]:
     """Pause a send run after previews exist and before external delivery."""
     send_emails = bool(state.get("send_emails", False))
     require_approval = bool(state.get("require_approval", False))
-    if not send_emails or not require_approval:
+    with start_span(
+        "calorch.node.approval_gate",
+        send_emails=send_emails,
+        require_approval=require_approval,
+        preview_count=len(state.get("prepared_emails", {})),
+    ) as span:
+        if not send_emails or not require_approval:
+            return {
+                "delivery_approved": True,
+                "approval_status": "not_required",
+                "log": ["approval_gate: approval not required"],
+            }
+
+        from langgraph.types import interrupt
+
+        decision = interrupt(
+            {
+                "question": "Approve sending the prepared research emails?",
+                "run_id": state.get("run_id", ""),
+                "event_count": len(state.get("prepared_emails", {})),
+                "emails": [
+                    {
+                        "event_id": preview.event_id,
+                        "to": preview.to,
+                        "subject": preview.subject,
+                        "html_path": preview.html_path,
+                        "attachment_path": preview.attachment_path,
+                    }
+                    for preview in state.get("prepared_emails", {}).values()
+                ],
+            }
+        )
+        approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)
+        status = "approved" if approved else "rejected"
+        span.set_attribute("decision", status)
         return {
-            "delivery_approved": True,
-            "approval_status": "not_required",
-            "log": ["approval_gate: approval not required"],
+            "delivery_approved": approved,
+            "approval_status": status,
+            "log": [f"approval_gate: {status}"],
         }
-
-    from langgraph.types import interrupt
-
-    decision = interrupt(
-        {
-            "question": "Approve sending the prepared research emails?",
-            "run_id": state.get("run_id", ""),
-            "event_count": len(state.get("prepared_emails", {})),
-            "emails": [
-                {
-                    "event_id": preview.event_id,
-                    "to": preview.to,
-                    "subject": preview.subject,
-                    "html_path": preview.html_path,
-                    "attachment_path": preview.attachment_path,
-                }
-                for preview in state.get("prepared_emails", {}).values()
-            ],
-        }
-    )
-    approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)
-    status = "approved" if approved else "rejected"
-    return {
-        "delivery_approved": approved,
-        "approval_status": status,
-        "log": [f"approval_gate: {status}"],
-    }
 
 
 def fan_out_delivery(state: OrchestratorState) -> list[Any] | str:
@@ -539,6 +582,18 @@ def deliver_event(payload: dict[str, Any], config: Optional[RunnableConfig] = No
     send_emails = bool(payload.get("send_emails", False))
     run_id = str(payload.get("run_id", ""))
     delivery_key = f"{run_id}:{ev.id}"
+    with start_span(
+        "calorch.node.deliver_event",
+        event_id=ev.id,
+        event_type=cls.final_label.value,
+        send_emails=send_emails,
+    ) as span:
+        return _deliver_event_inner(
+            c, ev, cls, preview, document, onedrive_url, send_emails, run_id, delivery_key, span
+        )
+
+
+def _deliver_event_inner(c, ev, cls, preview, document, onedrive_url, send_emails, run_id, delivery_key, span):
     errors: list[str] = []
     emails: dict[str, EmailArtifact] = {}
 
@@ -644,6 +699,8 @@ def deliver_event(payload: dict[str, Any], config: Optional[RunnableConfig] = No
         log.warning("repo.upsert failed for %s: %s", ev.id, e)
         errors.append(f"repo:{ev.id}:{e!r}")
 
+    span.set_attribute("errors", len(errors))
+    span.set_attribute("email_status", status)
     return {
         "emails": emails,
         "followups": [_followup_for(ev, cls)],
@@ -761,49 +818,56 @@ def _safe_artifact_name(value: str) -> str:
 def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
     """Cross-event aggregation — weekly briefing summary."""
     c = _ctx(config)
-    by_type: dict[str, int] = {}
-    sent = 0
-    drafts = 0
-    failed: list[str] = []
-    for ev_id, em in state.get("emails", {}).items():
-        if em.status == "sent":
-            sent += 1
-        elif em.status == "draft":
-            drafts += 1
-        else:
-            failed.append(ev_id)
-    for cls in state.get("classifications", {}).values():
-        by_type[cls.final_label.value] = by_type.get(cls.final_label.value, 0) + 1
+    with start_span(
+        "calorch.node.aggregate_briefing",
+        event_count=len(state.get("events", [])),
+    ) as span:
+        by_type: dict[str, int] = {}
+        sent = 0
+        drafts = 0
+        failed: list[str] = []
+        for ev_id, em in state.get("emails", {}).items():
+            if em.status == "sent":
+                sent += 1
+            elif em.status == "draft":
+                drafts += 1
+            else:
+                failed.append(ev_id)
+        for cls in state.get("classifications", {}).values():
+            by_type[cls.final_label.value] = by_type.get(cls.final_label.value, 0) + 1
 
-    body = (
-        f"Processed {len(state.get('events', []))} events "
-        f"({sent} sent / {drafts} drafts / {len(failed)} failed). "
-        f"Type mix: " + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
-    )
+        body = (
+            f"Processed {len(state.get('events', []))} events "
+            f"({sent} sent / {drafts} drafts / {len(failed)} failed). "
+            f"Type mix: " + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
+        )
 
-    sections = [
-        ("Executive summary", [body]),
-        ("By event type", [f"• {k}: {v}" for k, v in sorted(by_type.items())]),
-        ("Top follow-ups", [f"• {f.action} (owner: {f.owner})" for f in state.get("followups", [])[:5]]),
-        ("Open issues", state.get("errors", []) or ["(none)"]),
-    ]
-    out_path = c.out("briefings/weekly.html")
-    html = f"""<!doctype html><html><head><meta charset='utf-8'></head><body>
+        sections = [
+            ("Executive summary", [body]),
+            ("By event type", [f"• {k}: {v}" for k, v in sorted(by_type.items())]),
+            ("Top follow-ups", [f"• {f.action} (owner: {f.owner})" for f in state.get("followups", [])[:5]]),
+            ("Open issues", state.get("errors", []) or ["(none)"]),
+        ]
+        out_path = c.out("briefings/weekly.html")
+        html = f"""<!doctype html><html><head><meta charset='utf-8'></head><body>
 <h1>Weekly briefing &mdash; {state['window_start'].date()} to {state['window_end'].date()}</h1>
 {''.join(f'<h2>{h}</h2><ul>{"".join(f"<li>{x}</li>" for x in items)}</ul>' for h, items in sections)}
 </body></html>"""
-    write_text(out_path, html)
+        write_text(out_path, html)
+        span.set_attribute("sent", sent)
+        span.set_attribute("drafts", drafts)
+        span.set_attribute("failed", len(failed))
 
-    return {
-        "weekly_briefing": WeeklyBriefing(
-            week_start=state["window_start"],
-            week_end=state["window_end"],
-            sections=[{"heading": h, "body": "\n".join(items)} for h, items in sections],
-            event_count=len(state.get("events", [])),
-            path=str(out_path),
-        ),
-        "log": [f"aggregate_briefing: {body}"],
-    }
+        return {
+            "weekly_briefing": WeeklyBriefing(
+                week_start=state["window_start"],
+                week_end=state["window_end"],
+                sections=[{"heading": h, "body": "\n".join(items)} for h, items in sections],
+                event_count=len(state.get("events", [])),
+                path=str(out_path),
+            ),
+            "log": [f"aggregate_briefing: {body}"],
+        }
 
 
 # ---------------------------------------------------------------------------

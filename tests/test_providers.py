@@ -57,6 +57,12 @@ def base_settings() -> Settings:
         langsmith_tracing=False,
         checkpoint_postgres_uri=None,
         calorch_api_key=None,
+        run_timeout_seconds=300.0,
+        max_concurrent_runs=3,
+        max_request_bytes=1048576,
+        cors_allowed_origins=[],
+        rate_limit_per_minute=30,
+        audit_log_path=Path("./out/audit.jsonl"),
     )
 
 

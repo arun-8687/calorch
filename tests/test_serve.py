@@ -164,3 +164,217 @@ def test_run_request_rejects_inverted_window_at_schema_level():
             end=datetime(2026, 3, 2, tzinfo=timezone.utc),
             send_emails=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# Request size limit
+# ---------------------------------------------------------------------------
+def test_request_size_limit_rejects_oversized_body(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Content-Length > max_request_bytes gets a 413 before reaching the route."""
+    monkeypatch.setenv("MAX_REQUEST_BYTES", "100")
+    monkeypatch.setenv("USE_MOCKS", "true")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
+    get_settings.cache_clear()
+    serve._startup()
+    try:
+        client = TestClient(serve.app)
+        response = client.post(
+            "/run",
+            content=b"x" * 200,
+            headers={
+                "X-Calorch-API-Key": "test",
+                "Content-Type": "application/json",
+                "Content-Length": "200",
+            },
+        )
+        assert response.status_code == 413
+    finally:
+        serve._shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+def test_rate_limit_returns_429_after_threshold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Once the per-minute limit is hit, subsequent calls get 429."""
+    from calorch import rate_limit
+    rate_limit.reset_rate_limiter()
+    monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "3")
+    monkeypatch.setenv("USE_MOCKS", "true")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
+    get_settings.cache_clear()
+    rate_limit.reset_rate_limiter()
+    serve._startup()
+    try:
+        client = TestClient(serve.app)
+        # First 3 calls should not be rate-limited (the call may 503 since graph is
+        # set up but we only care that the response isn't 429)
+        for _ in range(3):
+            r = client.get("/runs/no-such-thread", headers={"X-Calorch-API-Key": "test-key"})
+            assert r.status_code != 429
+        # 4th call should hit rate limit
+        r = client.get("/runs/no-such-thread", headers={"X-Calorch-API-Key": "test-key"})
+        assert r.status_code == 429
+        assert "Retry-After" in r.headers
+    finally:
+        serve._shutdown()
+        rate_limit.reset_rate_limiter()
+
+
+def test_rate_limit_does_not_apply_to_health(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Health probe is exempt so the platform can poll freely."""
+    from calorch import rate_limit
+    rate_limit.reset_rate_limiter()
+    monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "1")
+    monkeypatch.setenv("USE_MOCKS", "true")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
+    get_settings.cache_clear()
+    rate_limit.reset_rate_limiter()
+    serve._startup()
+    try:
+        client = TestClient(serve.app)
+        for _ in range(10):
+            r = client.get("/health")
+            assert r.status_code == 200
+    finally:
+        serve._shutdown()
+        rate_limit.reset_rate_limiter()
+
+
+# ---------------------------------------------------------------------------
+# Request ID correlation
+# ---------------------------------------------------------------------------
+def test_request_id_generated_when_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Middleware generates a request ID and echoes it in the response header."""
+    monkeypatch.setenv("USE_MOCKS", "true")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
+    get_settings.cache_clear()
+    serve._startup()
+    try:
+        client = TestClient(serve.app)
+        response = client.get("/health")
+        assert "X-Request-ID" in response.headers
+        assert len(response.headers["X-Request-ID"]) > 0
+    finally:
+        serve._shutdown()
+
+
+def test_request_id_echoed_from_inbound_header(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Inbound X-Request-ID is preserved end-to-end."""
+    monkeypatch.setenv("USE_MOCKS", "true")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
+    get_settings.cache_clear()
+    serve._startup()
+    try:
+        client = TestClient(serve.app)
+        response = client.get("/health", headers={"X-Request-ID": "trace-abc-123"})
+        assert response.headers["X-Request-ID"] == "trace-abc-123"
+    finally:
+        serve._shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Graph execution timeout
+# ---------------------------------------------------------------------------
+def test_invoke_with_timeout_raises_on_hang(monkeypatch: pytest.MonkeyPatch):
+    """A hung graph invoke returns _GraphTimeout after the deadline."""
+    import time
+
+    class FakeGraph:
+        def invoke(self, input, config=None):
+            time.sleep(5.0)
+            return {"ok": True}
+
+    with pytest.raises(serve._GraphTimeout):
+        serve._invoke_with_timeout(FakeGraph(), {}, {}, timeout_seconds=0.1)
+
+
+def test_invoke_with_timeout_returns_normally_when_fast(monkeypatch: pytest.MonkeyPatch):
+    """A fast graph invoke returns its result within the deadline."""
+    class FakeGraph:
+        def invoke(self, input, config=None):
+            return {"events": [1, 2, 3]}
+
+    result = serve._invoke_with_timeout(FakeGraph(), {}, {}, timeout_seconds=2.0)
+    assert result == {"events": [1, 2, 3]}
+
+
+# ---------------------------------------------------------------------------
+# Audit log integration
+# ---------------------------------------------------------------------------
+def test_run_endpoint_writes_audit_entries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """POST /run produces run_started and run_completed audit entries."""
+    from calorch import audit as audit_mod
+    audit_mod.reset_audit_log()
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("USE_MOCKS", "true")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
+    get_settings.cache_clear()
+    audit_mod.reset_audit_log()
+    serve._startup()
+    try:
+        client = TestClient(serve.app)
+        body = {
+            "start": "2026-03-02T00:00:00Z",
+            "end": "2026-03-09T00:00:00Z",
+            "send_emails": False,
+        }
+        response = client.post(
+            "/run", json=body, headers={"X-Calorch-API-Key": "test"}
+        )
+        assert response.status_code == 200
+        entries = audit_mod.get_audit_log().read()
+        events = [e["event"] for e in entries]
+        assert "run_started" in events
+        assert "run_completed" in events
+    finally:
+        serve._shutdown()
+        audit_mod.reset_audit_log()
+
+
+def test_approval_endpoint_writes_audit_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """POST /runs/{id}/approval produces an approval_decision audit entry."""
+    from calorch import audit as audit_mod
+    audit_mod.reset_audit_log()
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("USE_MOCKS", "true")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
+    get_settings.cache_clear()
+    audit_mod.reset_audit_log()
+    serve._startup()
+    try:
+        client = TestClient(serve.app)
+        # First, start a run that pauses for approval
+        body = {
+            "start": "2026-03-02T00:00:00Z",
+            "end": "2026-03-09T00:00:00Z",
+            "send_emails": True,
+            "require_approval": True,
+        }
+        r1 = client.post("/run", json=body, headers={"X-Calorch-API-Key": "test"})
+        assert r1.status_code == 200
+        thread_id = r1.json()["thread_id"]
+        # Now approve
+        r2 = client.post(
+            f"/runs/{thread_id}/approval",
+            json={"approved": True, "reason": "All good"},
+            headers={"X-Calorch-API-Key": "test"},
+        )
+        assert r2.status_code == 200
+        entries = audit_mod.get_audit_log().read()
+        decisions = [e for e in entries if e["event"] == "approval_decision"]
+        assert len(decisions) >= 1
+        assert decisions[0]["decision"] == "approved"
+        assert decisions[0]["reason"] == "All good"
+    finally:
+        serve._shutdown()
+        audit_mod.reset_audit_log()
