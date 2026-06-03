@@ -1,102 +1,237 @@
-# calorch
+# Calorch
 
-> **Calendar-Driven Intelligent Workflow Orchestrator** — a LangGraph
-> + Azure Container Apps engine that reads Outlook calendar events,
-> classifies them into one of eight research workflow types, enriches
-> each with live SEC EDGAR / FRED / Tiingo data, generates a prep-pack
-> DOCX brief with LLM-powered narrative, and drafts an HTML email.
+> **Enterprise-Grade Calendar-Driven Intelligent Workflow Orchestrator**
+>
+> LangGraph + Azure Container Apps engine for equity research prep-pack automation.
+> Ingests Outlook calendar events, classifies them into 8 research workflows, enriches
+> with live SEC EDGAR / FRED / FOMC H.15 data, generates DOCX briefs with LLM-powered
+> narrative, and delivers HTML emails via Microsoft Graph — all in parallel.
+
+```mermaid
+flowchart TB
+    subgraph INGEST["Calendar Ingestion"]
+        GRAPH["Microsoft Graph API<br/>Outlook Calendar"] --> SCAN["scan_calendar<br/>list_events(start, end)"]
+    end
+
+    subgraph CLASSIFY["Classification (2-pass)"]
+        SCAN --> KW["prefilter_keywords<br/>Pass 1 · deterministic"]
+        KW --> LLM_CLASS["llm_classify<br/>Pass 2 · model-agnostic JSON"]
+    end
+
+    subgraph ENRICH["Enrichment (8-way parallel fan-out via Send API)"]
+        LLM_CLASS --> FANOUT["fan_out_prepare_events"]
+        FANOUT --> P1["prepare_event · ev-001"]
+        FANOUT --> P2["prepare_event · ev-002"]
+        FANOUT --> PN["prepare_event · ev-00N"]
+    end
+
+    subgraph PROVIDERS["Live Data Providers"]
+        direction TB
+        IXBRL["SEC iXBRL Fundamentals<br/>Revenue · EPS · Margins<br/>Balance Sheet · Cash Flow"]
+        SEG["SEC iXBRL Segments<br/>Product + Geographic"]
+        EFTS["SEC EFTS<br/>Guidance · Risk Factors"]
+        FRED["FRED<br/>VIX · S&P 500 · Oil · Gold · BTC"]
+        H15["FOMC H.15<br/>Treasury Curve · Fed Funds"]
+        TIINGO["Tiingo<br/>EOD Price · Consensus"]
+    end
+
+    subgraph LLM["LLM Enrichment"]
+        PROMPT["Template-driven prompts<br/>with grounding rule"]
+        FILTER["Thinking-block filter<br/>150+ phrase blacklist"]
+        MODEL["deepseek-v4-pro · kimi-k2.6<br/>glm-5.1 · Azure OpenAI"]
+    end
+
+    subgraph TEMPLATES["Template Engine"]
+        TPL["8 JSON templates<br/>data/templates/*.json"]
+        ENGINE["TemplateEngine<br/>JSON → EventAnalysis"]
+    end
+
+    subgraph RENDER["DOCX + HTML Rendering"]
+        DOCX["render_docx<br/>python-docx · prep_scanner format"]
+        HTML["render_html_email<br/>inline CSS · responsive"]
+    end
+
+    subgraph DELIVER["Delivery"]
+        DOCX --> GATE["approval_gate<br/>interrupt() before send"]
+        HTML --> GATE
+        GATE --> SEND["deliver_event<br/>Graph draft · OneDrive · Repository"]
+    end
+
+    subgraph STORE["Persistence"]
+        COSMOS[("Cosmos DB<br/>events container")]
+        PG[("PostgreSQL<br/>LangGraph checkpoints")]
+        ONEDRIVE[("OneDrive<br/>DOCX archive")]
+        JSON[("JSON Repository<br/>local fallback")]
+    end
+
+    subgraph AZURE["Azure Container Apps"]
+        ACA["Consumption tier<br/>scale-to-zero<br/>~$0.30/mo"]
+        ACR[("ACR Basic<br/>$5/mo")]
+    end
+
+    PROVIDERS --> P1
+    PROVIDERS --> P2
+    PROVIDERS --> PN
+    LLM --> P1
+    LLM --> P2
+    LLM --> PN
+    TEMPLATES --> P1
+    TEMPLATES --> P2
+    TEMPLATES --> PN
+    P1 --> DOCX
+    P2 --> DOCX
+    PN --> DOCX
+    SEND --> COSMOS
+    SEND --> ONEDRIVE
+    SEND --> PG
+    SEND --> JSON
+    ACA --> ACR
+```
+
+---
+
+## Enterprise Data Architecture
+
+All data flows through a **Protocol-based provider layer** (`src/calorch/providers.py`). The renderer never knows which implementation is wired — swapping Tiingo for Refinitiv or Bloomberg is a config change, not a code change.
+
+### Provider Priority Chain
+
+| Priority | Source | Data | Authentication | SLA |
+|----------|--------|------|---------------|-----|
+| 1 | **SEC iXBRL Company Facts** | Revenue, EPS, gross/operating/net margins, ROE, ROA, assets, liabilities, cash, debt, capex, R&D, shares outstanding | None (free, ToS-compliant) | Best-effort |
+| 2 | **SEC iXBRL Instance Docs** | Product segment revenue, geographic revenue (parsed from inline XBRL on 10-Q/10-K) | None (free) | Best-effort |
+| 3 | **SEC EFTS** | Full-text filing search — guidance, outlook, risk factor excerpts | None (free) | Best-effort |
+| 4 | **FOMC H.15** | Full Treasury yield curve (1M→30Y) + effective federal funds rate | None (free, scraped) | Daily |
+| 5 | **FRED** | VIX, S&P 500, WTI oil, gold, BTC, CPI, unemployment, USD/EUR | Optional key (free) | Real-time |
+| 6 | **Tiingo** | EOD price, market cap, analyst consensus, price targets | API key ($50/mo) | Delayed |
+
+### Provider Contract
+
+```python
+class PriceProvider(Protocol):
+    def quote(self, ticker: str) -> dict[str, Any]: ...
+
+class ConsensusProvider(Protocol):
+    def estimates(self, ticker: str) -> dict[str, Any]: ...
+    def recommendations(self, ticker: str) -> dict[str, Any]: ...
+
+class FundamentalsProvider(Protocol):
+    def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]: ...
+
+class MacroProvider(Protocol):
+    def snapshot(self) -> dict[str, dict[str, Any]]: ...
+
+class SegmentProvider(Protocol):
+    def latest_segments(self, cik: str, ticker: str, *, axis: str = "product") -> list[dict[str, Any]]: ...
+
+class NarrativeProvider(Protocol):
+    def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
+```
+
+When a provider lacks credentials, it returns empty data with `{"note": "TIINGO_API_KEY not set", "source": "none"}` — never an exception, never a stub, never a mock.
+
+---
+
+## Template System
+
+All 8 event types are defined as JSON templates (`data/templates/`) modeled on real equity research prep packs. Zero hardcoded content in Python.
+
+```json
+{
+  "event_type": "earnings_call",
+  "sections": [
+    {
+      "id": "executive_snapshot",
+      "title": "Executive Snapshot",
+      "source": "llm",
+      "llm_method": "enrich_headline",
+      "fallback": ["{primary_ticker} earnings — see data tables above."],
+      "prompt_addendum": "Write 3-4 crisp bullet points..."
+    },
+    {
+      "id": "last_quarter",
+      "title": "Last Quarter Performance",
+      "source": "data",
+      "table_type": "two_col",
+      "rows": [
+        {"label": "EPS Actual", "value": "{eps_actual}"}
+      ]
+    }
+  ]
+}
+```
+
+**Template Engine** (`src/calorch/templates.py`):
+- `load_template(event_type)` — loads JSON template
+- `TemplateEngine.build(context, data_tables)` — resolves variables, dispatches LLM calls, builds `EventAnalysis`
+
+---
+
+## LLM Enrichment Layer
+
+### Classification (model-agnostic)
+Uses `llm.invoke()` with a JSON prompt — no `response_format` / JSON mode requirement. Works with DeepSeek, kimi, GLM, and Azure OpenAI. Parse robust — handles markdown fences, inline JSON, and raw JSON.
+
+### Enrichment (all 8 event types)
+`LlmEnricher` generates narrative bullets via section-specific prompts. Each section has a `prompt_addendum` in the template.
+
+### Safety Controls
+
+| Control | Implementation |
+|---------|---------------|
+| **Grounding Rule** | "ONLY use data explicitly provided in context. Do NOT use training data." |
+| **Thinking-Block Filter** | 150+ phrase blacklist + 70% threshold. If model outputs reasoning, response is discarded and template fallback is used |
+| **Fallback Content** | Every template section has data-driven fallback — no blank sections |
+
+---
+
+## Graph Pipeline
 
 ```
 START
-  → scan_calendar       (Graph API — Outlook calendar ONLY)
-  → prefilter_keywords  (Pass 1 — deterministic keyword scoring)
-  → llm_classify        (Pass 2 — LLM, model-agnostic JSON output)
-  → [fan-out] prepare_event
-        ├── providers.fundamentals  → SEC iXBRL (revenue, EPS, margins, balance sheet)
-        ├── providers.segments      → SEC iXBRL (product + geographic revenue)
-        ├── providers.narrative     → SEC EFTS (guidance excerpts)
-        ├── providers.macro         → FRED + FOMC H.15 (rates, VIX, oil, gold, BTC)
-        ├── providers.price         → Tiingo (EOD price, market cap)
-        ├── providers.consensus     → Tiingo (analyst estimates, ratings)
-        ├── TemplateEngine          → JSON template per event type
-        └── LlmEnricher            → Opencode Go / Azure OpenAI narrative
-  → approval_gate        (optional human-in-the-loop interrupt)
-  → [fan-out] deliver_event
-  → aggregate_briefing
+  → scan_calendar          (Microsoft Graph API — Outlook calendar only)
+  → prefilter_keywords     (deterministic keyword scoring, zero-cost)
+  → llm_classify           (model-agnostic JSON classification)
+  → fan_out_prepare_events (LangGraph Send API — 8-way parallel)
+  → approval_gate          (human-in-the-loop interrupt)
+  → fan_out_deliver_event  (draft email, upload to OneDrive, persist to Cosmos)
+  → aggregate_briefing     (cross-event weekly summary)
   → END
 ```
 
----
-
-## Data sources — live, no stubs
-
-Every provider is live. No stub data, no curated demo data, no mocks in the data path.
-When a provider lacks credentials it returns empty data with a clear `note` explaining why.
-
-| Provider | Source | Cost | Data |
-|----------|--------|------|------|
-| **SEC iXBRL Fundamentals** | `data.sec.gov/api/xbrl/companyfacts/` | Free | Revenue, EPS, gross/operating/net margins, ROE, ROA, assets, liabilities, cash, debt, capex, R&D — all quarterly |
-| **SEC iXBRL Segments** | iXBRL instance docs from 10-Q/10-K | Free | Product segment revenue (iPhone/Mac/Services) + geographic revenue (Americas/EMEA/APAC) |
-| **SEC EFTS** | `efts.sec.gov/LATEST/search-index` | Free | Full-text filing search — guidance, outlook, risk factor excerpts |
-| **FRED** | `api.stlouisfed.org` | Free (key optional) | VIX, S&P 500, oil, gold, BTC, CPI, unemployment, DFF |
-| **FOMC H.15** | `federalreserve.gov` (scraped) | Free | Full Treasury yield curve (1M → 30Y) + effective fed funds rate |
-| **Tiingo** | `api.tiingo.com` | $50/mo | EOD prices, market cap, analyst consensus, price targets |
-
-Every report ends with a **Data Sources table** showing provider status:
-
-| Provider | Status | Detail |
-|----------|--------|--------|
-| SEC iXBRL Fundamentals | ACTIVE | Revenue, EPS, margins, balance sheet, cash flow |
-| SEC iXBRL | ACTIVE | Company facts + segment revenue |
-| SEC EFTS | ACTIVE | Full-text filing search |
-| FRED | ACTIVE | Federal Reserve Economic Data |
-| FOMC H.15 | ACTIVE | US Treasury / Fed rates |
-| Tiingo | MISSING | TIINGO_API_KEY not set |
+| Node | Responsibility | Dependencies |
+|------|---------------|--------------|
+| `scan_calendar` | Pull events from Graph `/me/calendar/calendarView` | GraphClient, Entra ID |
+| `prefilter_keywords` | Score each event against 8 keyword sets | None (pure Python) |
+| `llm_classify` | LLM classification with JSON output | LLM (Opencode Go / Azure) |
+| `prepare_event` | Enrich event → DOCX → HTML email | All 6 providers, LLM, TemplateEngine |
+| `approval_gate` | Pause graph for human review | LangGraph `interrupt()` |
+| `deliver_event` | Send/draft email, patch calendar, persist | GraphClient, OneDriveClient, Repository |
+| `aggregate_briefing` | Generate `weekly.html` from all events | Repository |
 
 ---
 
-## Templates — no hardcoded content
+## Supported LLM Providers
 
-All 8 report types are defined as JSON templates in `data/templates/`, modeled on
-real equity research prep packs. Each template specifies:
-
-| Field | Purpose |
-|-------|---------|
-| `sections` | Ordered section list — title, content source (`llm` / `data` / `static`), fallback text |
-| `llm_method` | Which `LlmEnricher` method to call (`enrich_headline`, `enrich_key_questions`, etc.) |
-| `prompt_addendum` | Section-specific prompt text appended to the baseline system prompt |
-| `table_type` | `two_col` (Metric\|Value) or `multi_col` with configurable headers |
-| `rows_from` | Key linking to data built by the renderer (live provider data) |
-
-`src/calorch/templates.py` loads templates and resolves variables with live data.
+| Provider | Models | Authentication | Notes |
+|----------|--------|---------------|-------|
+| **Opencode Go** | `deepseek-v4-pro`, `deepseek-v4-flash`, `kimi-k2.5`, `kimi-k2.6`, `glm-5.1`, `glm-5` | `OPENCODE_GO_API_KEY` | OpenAI-compatible endpoint, ~$10/mo |
+| **Azure OpenAI** | `gpt-4o`, `gpt-4o-mini` | `AZURE_OPENAI_API_KEY` + endpoint | Fallback when Opencode Go absent |
 
 ---
 
-## LLM — model-agnostic, thinking-filtered
-
-| Feature | Detail |
-|---------|--------|
-| **Classification** | Plain `invoke()` with JSON prompt — no `response_format` / structured-output requirement. Works with DeepSeek, kimi, GLM, Azure OpenAI |
-| **Enrichment** | `LlmEnricher` generates narrative bullets for all 8 event types. Headline, guidance, margin walk, risk factors, key questions, channel check questionnaire |
-| **Grounding** | Every prompt includes: *"ONLY use data explicitly provided in context. Do NOT use training data."* |
-| **Thinking-block filter** | 150+ phrase blacklist + 70% threshold — if the model outputs chain-of-thought reasoning instead of bullets, the response is discarded and template fallback is used |
-| **Fallback** | Every section has data-driven fallback content in the template — no blank sections |
-
-Supported models via Opencode Go endpoint: `deepseek-v4-pro`, `deepseek-v4-flash`, `kimi-k2.5`, `kimi-k2.6`, `glm-5.1`, `glm-5`.
-
----
-
-## Project layout
+## Project Structure
 
 ```
 calorch/
 ├── pyproject.toml
-├── langgraph.json               # LangGraph Studio entry
-├── Dockerfile                   # Azure Container Apps
-├── .env.example                 # template — copy to .env
+├── langgraph.json
+├── Dockerfile
+├── .env.example
+├── .gitignore
 ├── data/
-│   ├── seed_events.json         # 16 demo events (2 per workflow type)
-│   └── templates/               # 8 JSON report templates
+│   ├── seed_events.json              # 16 demo events (2 per workflow type)
+│   └── templates/                    # 8 JSON report templates
 │       ├── earnings_call.json
 │       ├── management_meeting.json
 │       ├── conference.json
@@ -105,121 +240,121 @@ calorch/
 │       ├── portfolio_meeting.json
 │       ├── internal_review.json
 │       └── analyst_meeting.json
-├── deploy/
-│   ├── README.md
-│   ├── containerapp.yaml
-│   └── deploy.ps1
-├── scripts/
-│   ├── run_demo.py              # end-to-end smoke test
-│   ├── run_sec.py               # real SEC EDGAR run
-│   └── render_architecture.py   # markdown → HTML with Mermaid
+├── src/calorch/
+│   ├── state.py                      # TypedDict state, Pydantic models, enums
+│   ├── config.py                     # Settings from environment
+│   ├── graph.py                      # StateGraph assembly (7 nodes, 2 fan-outs)
+│   ├── nodes.py                      # Node functions + per-event pipeline
+│   ├── renderers.py                  # DOCX (python-docx) + HTML email builders
+│   ├── _earnings_helpers.py          # Financial table builders + formatters
+│   ├── templates.py                  # Template engine — JSON → EventAnalysis
+│   ├── llm.py                        # LLM factory — Opencode Go → Azure → MockChatModel
+│   ├── llm_enrich.py                 # LLM enrichment with thinking-block filter
+│   ├── providers.py                  # Protocol-based live data layer
+│   ├── tools.py                      # GraphClient, OneDrive, Repository, make_providers
+│   ├── sec.py                        # SEC EDGAR client, TickerMap, form classification
+│   ├── sec_ixbrl.py                  # iXBRL parser + companyfacts fundamentals
+│   ├── sec_efts.py                   # SEC full-text search client
+│   ├── fred.py                       # FRED API client
+│   ├── fed_h15.py                    # FOMC H.15 yield curve scraper
+│   ├── tiingo.py                     # Tiingo API client (prices + consensus)
+│   ├── serve.py                      # FastAPI endpoints (/health, /run, /runs/{id})
+│   └── cli.py                        # `calorch run / summary / serve`
+├── tests/                            # 57 tests across 10 modules
+│   ├── test_graph.py                 # 3 end-to-end graph tests
+│   ├── test_renderers.py             # DOCX + HTML rendering
+│   ├── test_llm_enrich.py            # LLM enrichment + thinking filter
+│   ├── test_providers.py             # Provider dispatch + live provider units
+│   ├── test_sec_providers.py         # iXBRL parser + EFTS client
+│   ├── test_fred.py                  # FRED + FOMC H.15
+│   └── ...
 ├── docs/
-│   ├── architecture.md
-│   └── evaluations/             # ADR, data-source, implementation reviews
-├── tests/
-│   ├── test_graph.py            # 3 end-to-end tests
-│   ├── test_renderers.py        # DOCX + HTML rendering
-│   ├── test_llm_enrich.py       # LLM enrichment layer
-│   ├── test_llm.py              # LLM factory (Opencode Go / Azure / Mock)
-│   ├── test_providers.py        # Provider dispatch + live provider units
-│   ├── test_sec_providers.py    # iXBRL parser + EFTS client
-│   ├── test_fred.py             # FRED + FOMC H.15
-│   ├── test_classifier.py       # Classification heuristics
-│   ├── test_tools.py            # GraphClient, OneDrive, Repository
-│   └── test_serve.py            # FastAPI /health, /run
-└── src/calorch/
-    ├── state.py                 # TypedDict state, Pydantic models, enums
-    ├── config.py                # Settings from environment
-    ├── graph.py                 # StateGraph assembly
-    ├── nodes.py                 # All node functions + per-event pipeline
-    ├── renderers.py             # DOCX + HTML builders, build_analysis dispatch
-    ├── _earnings_helpers.py     # Financial table builders + formatters
-    ├── templates.py             # Template engine — JSON → EventAnalysis
-    ├── llm.py                   # LLM factory: Opencode Go → Azure → MockChatModel
-    ├── llm_enrich.py            # LLM enrichment with thinking-block filter
-    ├── providers.py             # ProviderBundle — Protocol-based live data layer
-    ├── tools.py                 # GraphClient, OneDriveClient, Repository, make_providers
-    ├── sec.py                   # SEC EDGAR client, TickerMap, form classification
-    ├── sec_ixbrl.py             # iXBRL parser + companyfacts fundamentals
-    ├── sec_efts.py              # SEC full-text search client
-    ├── fred.py                  # FRED API client
-    ├── fed_h15.py               # FOMC H.15 yield curve scraper
-    ├── tiingo.py                # Tiingo API client (prices + consensus)
-    ├── serve.py                 # FastAPI /health, /run, /runs/{id}/approval
-    └── cli.py                   # `calorch run / summary / serve`
+│   ├── architecture.md               # Full Mermaid architecture doc
+│   └── evaluations/                  # ADR, data-source, implementation reviews
+├── deploy/
+│   ├── README.md                     # Cost comparison + ops guide
+│   ├── containerapp.yaml             # ACA template
+│   └── deploy.ps1                    # One-shot bootstrap script
+└── scripts/
+    ├── run_demo.py                   # End-to-end smoke test
+    ├── run_sec.py                    # Real SEC EDGAR run
+    └── render_architecture.py        # Markdown → HTML with Mermaid CDN
 ```
 
 ---
 
-## Quick start
+## Quick Start
 
 ```powershell
 # 1. Install
 python -m pip install -e .
 
-# 2. Run demo (no keys needed — uses seed events + MockChatModel)
+# 2. Demo (no keys required — seed events + MockChatModel)
 python scripts/run_demo.py
 
-# 3. Real run with Opencode Go LLM
-$env:OPENCODE_GO_API_KEY = "sk-..."
-$env:OPENCODE_GO_MODEL = "deepseek-v4-pro"
-python -m calorch.cli run --start 2026-06-01 --end 2026-06-08
-
-# 4. With live prices (optional — Tiingo $50/mo)
-$env:TIINGO_API_KEY = "your-key"
+# 3. Production run
+$env:OPENCODE_GO_API_KEY  = "sk-..."
+$env:OPENCODE_GO_MODEL    = "deepseek-v4-pro"
+$env:TIINGO_API_KEY      = "your-key"        # optional
 python -m calorch.cli run --start 2026-06-01 --end 2026-06-08
 ```
 
 ---
 
-## Production wiring
+## Environment Variables
 
-Copy `.env.example` → `.env`:
-
-| Variable | Purpose |
-|----------|---------|
-| `OPENCODE_GO_API_KEY` / `OPENCODE_GO_MODEL` | Opencode Go LLM (`deepseek-v4-pro`, `kimi-k2.6`, `glm-5.1`, …) |
-| `AZURE_OPENAI_API_KEY` / `_ENDPOINT` / `_DEPLOYMENT` | Azure OpenAI (fallback when Opencode Go absent) |
-| `TIINGO_API_KEY` | Real EOD prices + analyst consensus ($50/mo) |
-| `FRED_API_KEY` | FRED macro API key (free) — no-key calls work for low volume |
-| `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` | Entra ID app for Outlook calendar |
-| `GRAPH_USER_ID` | UPN of analyst whose calendar to scan |
-| `SEC_USER_AGENT` | **Required** — `"Your Name you@example.com"` |
-| `SEC_WATCHLIST` | Comma-separated tickers (default: AAPL,MSFT,NVDA,GOOGL,AMZN,…) |
-| `USE_FRED` / `USE_FED_H15` / `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` | Toggle free sources (all default `true`) |
-| `CALORCH_API_KEY` | Required `X-Calorch-API-Key` for HTTP endpoints |
-| `CHECKPOINT_POSTGRES_URI` | Durable LangGraph checkpoints across restarts |
-| `FACTSET_API_KEY` / `BLOOMBERG_BLPAPI_HOST` / `LSEG_CLIENT_ID` | Enterprise terminal data (future) |
-
----
-
-## Event types
-
-| # | Type | Enrichment | Template |
-|---|------|-----------|----------|
-| 1 | `earnings_call` | Executive snapshot, guidance, margin walk, risk factors, key questions, financial tables, segment + geo breakdowns, analyst sentiment, ESG, price performance | `earnings_call.json` |
-| 2 | `management_meeting` | Executive summary, key questions for management, risk factors, macro context | `management_meeting.json` |
-| 3 | `conference` | Company overview, recent developments, key questions for 1x1s, risk factors, ESG & governance | `conference.json` |
-| 4 | `kol_meeting` | Pre-call research, discussion guide, hypotheses tracker, note-taking template | `kol_meeting.json` |
-| 5 | `channel_check` | Revenue overview, model assumptions, standardized questionnaire (15-20 Q), channel finding tracker | `channel_check.json` |
-| 6 | `portfolio_meeting` | Market context, sector performance, holdings snapshot, key movers, upcoming catalysts | `portfolio_meeting.json` |
-| 7 | `internal_review` | Coverage universe, research activity, performance review, outstanding items | `internal_review.json` |
-| 8 | `analyst_meeting` | Analyst profile, debate points, key questions, risk factors, quoted view | `analyst_meeting.json` |
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `OPENCODE_GO_API_KEY` | Yes (for LLM) | Opencode Go API key |
+| `OPENCODE_GO_MODEL` | No | Model ID (`deepseek-v4-pro` default: `glm-5.1`) |
+| `AZURE_OPENAI_API_KEY` | No | Azure OpenAI (fallback LLM) |
+| `AZURE_OPENAI_ENDPOINT` | No | Azure OpenAI endpoint |
+| `TIINGO_API_KEY` | No | Real-time EOD prices + consensus ($50/mo) |
+| `FRED_API_KEY` | No | FRED macro API (free; no-key works for low volume) |
+| `GRAPH_TENANT_ID` | Yes (prod) | Entra ID tenant |
+| `GRAPH_CLIENT_ID` | Yes (prod) | Entra ID app registration |
+| `GRAPH_CLIENT_SECRET` | Yes (prod) | Entra ID client secret |
+| `GRAPH_USER_ID` | No | UPN (default: `me`) |
+| `SEC_USER_AGENT` | Yes (prod) | `"Your Name you@example.com"` |
+| `SEC_WATCHLIST` | No | Tickers (default: AAPL,MSFT,NVDA,…) |
+| `USE_MOCKS` | No | `true` = MockChatModel + seed events (default: `true`) |
+| `CALORCH_API_KEY` | No | API auth for `/run` endpoint |
+| `CHECKPOINT_POSTGRES_URI` | No | Durable checkpoints across restarts |
+| `USE_FRED` / `USE_FED_H15` / `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` | No | Toggle free sources (default: `true`) |
+| `LANGSMITH_API_KEY` | No | LangSmith tracing |
 
 ---
 
-## Cost profile
+## Event Types
 
-| Component | Cost |
+| Type | Template | LLM Enrichment | SEC Data |
+|------|----------|---------------|----------|
+| `earnings_call` | `earnings_call.json` | Executive snapshot, guidance, margin walk, risk factors, key questions | iXBRL fundamentals + segments + EFTS guidance |
+| `management_meeting` | `management_meeting.json` | Executive summary, key questions, risk factors | iXBRL segments + macro |
+| `conference` | `conference.json` | Company overview, key questions for 1x1s, risk factors | Fundamentals + macro |
+| `kol_meeting` | `kol_meeting.json` | Pre-call research, hypotheses | N/A (people-based) |
+| `channel_check` | `channel_check.json` | Revenue overview, questionnaire (15-20 Q), risk factors | Fundamentals + EFTS |
+| `portfolio_meeting` | `portfolio_meeting.json` | Key movers, discussion items | FRED + H.15 (macro) |
+| `internal_review` | `internal_review.json` | Performance review, key questions, risk factors | N/A |
+| `analyst_meeting` | `analyst_meeting.json` | Executive summary, key questions, risk factors | Fundamentals |
+
+---
+
+## Cost Profile (Weekly Run)
+
+| Component | Monthly Cost |
 |---|---|
-| Azure Container Apps (Consumption, weekly job) | ~$0.30/mo |
-| Azure Container Registry (Basic) | $5/mo |
-| Opencode Go LLM (~100 calls/week) | ~$10/mo |
-| SEC EDGAR / FRED / FOMC H.15 | Free |
-| Tiingo (optional) | $50/mo |
-| Cosmos DB Serverless | ~$0.25/mo |
-| Application Insights | ~$2-5/mo |
-| **Total** | **~$18-70/mo** |
+| Azure Container Apps (Consumption, scale-to-zero) | ~$0.30 |
+| Azure Container Registry (Basic) | $5.00 |
+| Opencode Go LLM (~100 calls/week) | ~$10.00 |
+| SEC EDGAR (unlimited, fair-use throttled) | Free |
+| FRED + FOMC H.15 (unlimited) | Free |
+| Tiingo EOD (optional, 500 calls/day) | $50.00 |
+| Cosmos DB Serverless | ~$0.25 |
+| Azure Key Vault | ~$1.00 |
+| Application Insights + Log Analytics | ~$5.00 |
+| **Total (without Tiingo)** | **~$21.55/mo** |
+| **Total (with Tiingo)** | **~$71.55/mo** |
 
 ---
 
@@ -229,13 +364,28 @@ Copy `.env.example` → `.env`:
 # Full suite
 python -m pytest tests/ -q
 
-# Per module
-python -m pytest tests/test_providers.py -q
-python -m pytest tests/test_sec_providers.py -q
-python -m pytest tests/test_graph.py -q
+# Key modules
+python -m pytest tests/test_graph.py -q        # End-to-end graph
+python -m pytest tests/test_providers.py -q    # Provider dispatch
+python -m pytest tests/test_sec_providers.py -q # iXBRL + EFTS
 ```
 
-57 tests. No network needed — tests use MockChatModel + inline HTTP mocks.
+**57 tests, all pass.** No network required — tests use MockChatModel + inline HTTP mocks.
+
+---
+
+## Data Sources Table
+
+Every generated report includes a Data Sources table showing provenance:
+
+| Provider | Status | Detail |
+|----------|--------|--------|
+| SEC iXBRL Fundamentals | ACTIVE | Revenue, EPS, margins, balance sheet, cash flow |
+| SEC iXBRL | ACTIVE | Company facts + segment revenue |
+| SEC EFTS | ACTIVE | Full-text filing search |
+| FRED | ACTIVE | Federal Reserve Economic Data |
+| FOMC H.15 | ACTIVE | US Treasury / Fed rates |
+| Tiingo | MISSING | TIINGO_API_KEY not set |
 
 ---
 
