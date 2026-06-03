@@ -365,12 +365,63 @@ python -m calorch.cli run --start 2026-06-01 --end 2026-06-08
 python -m pytest tests/ -q
 
 # Key modules
-python -m pytest tests/test_graph.py -q        # End-to-end graph
-python -m pytest tests/test_providers.py -q    # Provider dispatch
+python -m pytest tests/test_graph.py -q         # End-to-end graph
+python -m pytest tests/test_providers.py -q     # Provider dispatch
 python -m pytest tests/test_sec_providers.py -q # iXBRL + EFTS
+python -m pytest tests/test_serve.py -q         # HTTP API contract
+python -m pytest tests/test_audit.py -q        # Audit log
+python -m pytest tests/test_rate_limit.py -q    # Rate limiter
+python -m pytest tests/test_telemetry.py -q     # OpenTelemetry wrapper
+python -m pytest tests/test_logging_config.py -q# JSON logging + PII redaction
 ```
 
-**57 tests, all pass.** No network required — tests use MockChatModel + inline HTTP mocks.
+**139 tests, all pass.** No network required — tests use MockChatModel + inline HTTP mocks.
+
+---
+
+## Enterprise Hardening
+
+Production-grade reliability, security, and observability:
+
+### Observability
+- **Structured JSON logging** (`calorch.logging_config`) — one JSON object per line to stdout, ready for Azure Log Analytics / Datadog ingest. Set `LOG_FORMAT=json`.
+- **Request ID propagation** through `contextvars` — every log line, audit entry, and span carries the same correlation ID. Inbound `X-Request-ID` is preserved end-to-end.
+- **PII redaction** in log formatter — emails, SSN, phone numbers, bearer tokens, and API keys are redacted before emission. Body text > 200 chars is truncated.
+- **OpenTelemetry traces** (`calorch.telemetry`) — spans on every graph node, LLM call, and HTTP request. Install with `pip install calorch[otel]`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to export to Jaeger / Tempo / Honeycomb.
+- **Metrics endpoint** at `GET /metrics` — per-service request count, success rate, average latency.
+- **Health probes** — `GET /health` (liveness, no deps) and `GET /ready` (readiness, checks graph + checkpointer + context).
+
+### Reliability
+- **Shared HTTP client** (`calorch.http_client`) — connection pooling (httpx), exponential-backoff retry via tenacity, circuit breaker pattern, and metrics. All 5 external data sources (SEC iXBRL, SEC EFTS, FRED, Tiingo, FOMC H.15) use it.
+- **Graph execution timeout** — `_invoke_with_timeout` runs `graph.invoke()` in a thread with a hard deadline (default 5 min). A hung LLM call returns 504 instead of blocking the ACA replica.
+- **Graceful shutdown** — SIGTERM/SIGINT handler closes the shared HTTP client and Postgres checkpointer.
+- **Idempotent delivery** — `deliver_event` checks the repository for an existing `delivery_key` before sending.
+
+### Security
+- **API key guard** — `X-Calorch-API-Key` header required on all mutating endpoints (validated with `hmac.compare_digest`).
+- **Rate limiting** — per-caller token bucket, 30 req/min default. Returns 429 + `Retry-After` header. `/health` and `/ready` are exempt.
+- **Request size limit** — `Content-Length` > 1 MB gets a 413 before the body parser runs.
+- **CORS** — opt-in via `CORS_ALLOWED_ORIGINS`. Default is same-origin only.
+- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Strict-Transport-Security`, `Referrer-Policy`, `Permissions-Policy` on every response.
+- **Input validation** — Pydantic `field_validator` rejects `end <= start` and windows > 31 days at the schema level.
+- **Tightened exception handlers** — bare `except Exception` blocks in `sec_ixbrl.py` and `renderers.py` replaced with specific `httpx.HTTPError`, `KeyError`, `TypeError`, `ValueError`, `json.JSONDecodeError` — each with `log.warning(...)` so failures don't disappear silently.
+
+### Compliance
+- **Append-only audit log** (`calorch.audit`) — every run lifecycle event, approval decision, rate-limit hit, and timeout is written to a JSONL file at `AUDIT_LOG_PATH` (default `./out/audit.jsonl`). Includes `request_id`, `run_id`, `thread_id`, actor, timestamp.
+- **No PII in audit body** — only the structured metadata; full calendar body and email content are deliberately excluded.
+
+### Environment Variables (Hardening)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LOG_FORMAT` | `text` | `json` for log aggregation |
+| `LOG_LEVEL` | `INFO` | Root log level |
+| `RATE_LIMIT_PER_MINUTE` | `30` | Per-caller rate budget |
+| `MAX_REQUEST_BYTES` | `1048576` | 413 threshold |
+| `RUN_TIMEOUT_SECONDS` | `300` | Graph invoke deadline |
+| `CORS_ALLOWED_ORIGINS` | `` (empty) | CSV of allowed origins |
+| `AUDIT_LOG_PATH` | `./out/audit.jsonl` | Compliance evidence file |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP collector URL (optional) |
 
 ---
 
