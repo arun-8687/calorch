@@ -28,7 +28,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from calorch.config import get_settings
 from calorch.graph import make_graph
@@ -176,6 +176,24 @@ class RunRequest(BaseModel):
         default=True,
         description="Pause after previews and require approval before sending email.",
     )
+
+    @field_validator("end")
+    @classmethod
+    def _validate_end_after_start(cls, v: datetime, info) -> datetime:
+        """Reject windows that end before they start at the schema level too."""
+        start = info.data.get("start")
+        if start is not None and v <= start:
+            raise ValueError("end must be after start")
+        return v
+
+    @field_validator("end")
+    @classmethod
+    def _validate_max_window(cls, v: datetime, info) -> datetime:
+        """Cap window at 31 days to prevent runaway cost on misconfigured jobs."""
+        start = info.data.get("start")
+        if start is not None and (v - start).days > 31:
+            raise ValueError("window must be at most 31 days")
+        return v
 
 
 class RunResponse(BaseModel):

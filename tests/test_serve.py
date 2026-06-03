@@ -126,12 +126,12 @@ def test_metrics_endpoint(service):
 def test_shutdown_closes_http_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Shutdown handler closes the shared HTTP client."""
     from calorch.http_client import get_client, close_client
-    
+
     monkeypatch.setenv("USE_MOCKS", "true")
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(serve, "make_cik_lookup", lambda _settings: lambda _ticker: None)
     get_settings.cache_clear()
-    
+
     serve._startup()
     # Verify client was initialised
     assert get_client() is not None
@@ -139,3 +139,28 @@ def test_shutdown_closes_http_client(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     # After shutdown, global client is cleared
     from calorch import http_client
     assert http_client._http_client is None
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+def test_run_request_rejects_window_exceeding_31_days():
+    """Pydantic schema rejects windows longer than 31 days."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="at most 31 days"):
+        serve.RunRequest(
+            start=datetime(2026, 3, 1, tzinfo=timezone.utc),
+            end=datetime(2026, 5, 1, tzinfo=timezone.utc),  # 61 days
+            send_emails=False,
+        )
+
+
+def test_run_request_rejects_inverted_window_at_schema_level():
+    """Schema validator catches end <= start before it reaches the route handler."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="end must be after start"):
+        serve.RunRequest(
+            start=datetime(2026, 3, 9, tzinfo=timezone.utc),
+            end=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            send_emails=False,
+        )
