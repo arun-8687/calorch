@@ -524,15 +524,67 @@ def _enrich_guidance(providers: Any, cik: str | None, ticker: str | None) -> lis
         return None
 
 
-def _fmt_macro_row(series_id: str, label: str, entry: dict[str, Any]) -> str:
-    """Format one macro series as ``label = value (date, 1W %)``."""
-    val = entry.get("value")
-    if val is None:
-        return f"{label}: n/a"
-    date = entry.get("date", "")
-    change = entry.get("change_1w")
-    change_str = f", 1W {change:+.2f}%" if isinstance(change, (int, float)) else ""
-    return f"{label} = {val:,.2f} ({date}{change_str})"
+# ---------------------------------------------------------------------------
+# Shared builder helpers (extracted from the 9 event-type builders)
+# ---------------------------------------------------------------------------
+def _resolve_primary_ticker_and_cik(a_base: EventAnalysis, cik_lookup: Any) -> tuple[str | None, str | None]:
+    """Resolve primary ticker and CIK from analysis base.
+
+    Used by 5 of 9 event builders to eliminate duplicated ticker/CIK resolution.
+    """
+    primary_ticker = (a_base.tickers or [None])[0]
+    cik = None
+    if cik_lookup and primary_ticker:
+        try:
+            cik = cik_lookup(primary_ticker)
+        except (KeyError, ValueError) as e:
+            log.debug("CIK lookup miss for %s: %s", primary_ticker, e)
+        except httpx.HTTPError as e:
+            log.warning("CIK lookup network error for %s: %s", primary_ticker, e)
+    return primary_ticker, cik
+
+
+def _add_macro_table_to(data_tables: dict[str, Any], macro: dict[str, Any] | None) -> None:
+    """Insert a macro data table if the snapshot is non-empty."""
+    if macro:
+        data_tables["macro"] = {
+            "headers": ["Macro indicator", "Value", "1W Δ", "As of"],
+            "rows": _macro_table(macro),
+        }
+
+
+def _data_sources(providers: Any) -> list[dict[str, Any]]:
+    return providers.sources if providers else []
+
+
+def _build_with_template(
+    template_name: str,
+    context: dict[str, Any],
+    data_tables: dict[str, Any] | None,
+    llm_call: Any,
+    providers: Any,
+    *,
+    analysis: EventAnalysis | None = None,
+) -> EventAnalysis:
+    """Instantiate a template, run the TemplateEngine, and return the EventAnalysis.
+
+    Eliminates the 8-copy boilerplate:
+        tpl = load_template(...)
+        engine = TemplateEngine(tpl, llm_client=llm_call)
+        return engine.build(context=ctx, ...)
+    """
+    from calorch.templates import TemplateEngine, load_template
+
+    tpl = load_template(template_name)
+    engine = TemplateEngine(tpl, llm_client=llm_call)
+    a = engine.build(
+        context=context,
+        data_tables=data_tables or {},
+        data_sources=_data_sources(providers),
+    )
+    if analysis:
+        a.role_focus = analysis.role_focus
+    return a
 
 
 def _macro_table(snap: dict[str, dict[str, Any]] | None) -> list[list[str]]:
@@ -607,21 +659,9 @@ def _build_earnings_call(ev, cls, ed, llm_call, *, providers=None, cik_lookup=No
         _build_analyst_sentiment_table, _build_segment_table_pct, _build_geo_table_pct,
         _build_esg_snapshot, _build_recent_performance, _build_recent_performance_rows,
     )
-    from calorch.templates import TemplateEngine, load_template
 
     a_base = _base(f"Earnings Filing Brief — {ev.subject}", ev, cls, ed)
-    primary_ticker = (a_base.tickers or [None])[0]
-    cik = None
-    if cik_lookup and primary_ticker:
-        try:
-            cik = cik_lookup(primary_ticker)
-        except (KeyError, ValueError) as e:
-            # CIK lookup table doesn't know this ticker; renderer degrades to None
-            log.debug("CIK lookup miss for %s: %s", primary_ticker, e)
-            cik = None
-        except httpx.HTTPError as e:
-            log.warning("CIK lookup network error for %s: %s", primary_ticker, e)
-            cik = None
+    primary_ticker, cik = _resolve_primary_ticker_and_cik(a_base, cik_lookup)
 
     # ---- fetch all data ----
     price_data = providers.price.quote(primary_ticker) if providers and primary_ticker else None
@@ -666,11 +706,7 @@ def _build_earnings_call(ev, cls, ed, llm_call, *, providers=None, cik_lookup=No
     ast = _build_analyst_sentiment_table(consensus)
     if ast:
         data_tables["analyst_sentiment"] = ast
-    if macro:
-        data_tables["macro"] = {
-            "headers": ["Macro indicator", "Value", "1W Δ", "As of"],
-            "rows": _macro_table(macro),
-        }
+    _add_macro_table_to(data_tables, macro)
     data_tables["esg"] = {
         "headers": ["Metric", "Value"],
         "rows": [["ESG Risk Score", "{esg_score}"], ["Environmental", "{esg_env}"], ["Social", "{esg_social}"], ["Governance", "{esg_gov}"]],
@@ -740,11 +776,9 @@ def _build_earnings_call(ev, cls, ed, llm_call, *, providers=None, cik_lookup=No
         "esg_gov": "Dual-class: No. Board independence: High. CEO tenure: strong",
     }
 
-    # ---- template engine ----
-    tpl = load_template("earnings_call")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    return engine.build(context=ctx, data_tables=data_tables,
-                        data_sources=providers.sources if providers else [])
+    return _build_with_template(
+        "earnings_call", ctx, data_tables, llm_call, providers,
+    )
 
 
 def _fmt_price(val):
@@ -773,8 +807,6 @@ def _fmt_x(val):
 
 # -- Management Meeting ----------------------------------------------------
 def _build_management_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
-    from calorch.templates import TemplateEngine, load_template
-
     role = "CEO"
     for r in ("CEO", "CFO", "CRO", "CTO"):
         if r in ev.subject.upper():
@@ -782,18 +814,13 @@ def _build_management_meeting(ev, cls, ed, llm_call, *, providers=None, cik_look
             break
 
     a_base = _base(f"Management Meeting — {role}", ev, cls, ed)
-    primary_ticker = (a_base.tickers or [None])[0]
-    cik = cik_lookup(primary_ticker) if cik_lookup and primary_ticker else None
+    primary_ticker, cik = _resolve_primary_ticker_and_cik(a_base, cik_lookup)
     macro = _enrich_macro(providers)
     seg = _enrich_segments(providers, cik, primary_ticker)
     price_data = providers.price.quote(primary_ticker) if providers and primary_ticker else None
 
     data_tables: dict[str, Any] = {}
-    if macro:
-        data_tables["macro"] = {
-            "headers": ["Macro indicator", "Value", "1W Δ", "As of"],
-            "rows": _macro_table(macro),
-        }
+    _add_macro_table_to(data_tables, macro)
     if seg:
         data_tables["product_segments"] = {
             "headers": [f"Segment ({primary_ticker})", "Revenue", "Period end"],
@@ -822,29 +849,22 @@ def _build_management_meeting(ev, cls, ed, llm_call, *, providers=None, cik_look
         "key_metric_2": "—",
     })
 
-    tpl = load_template("management_meeting")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    a = engine.build(context=ctx, data_tables=data_tables)
-    a.role_focus = role
-    return a
+    a_base.role_focus = role
+    return _build_with_template(
+        "management_meeting", ctx, data_tables, llm_call, providers, analysis=a_base,
+    )
 
 
 # -- Conference (multi-company) -------------------------------------------
 def _build_conference(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
-    from calorch.templates import TemplateEngine, load_template
-
     a_base = _base(f"Conference Brief — {ev.subject}", ev, cls, ed)
     tickers = a_base.tickers or ["AAPL", "MSFT", "NVDA"]
     primary_ticker = tickers[0]
-    cik = cik_lookup(primary_ticker) if cik_lookup and primary_ticker else ""
+    _, cik = _resolve_primary_ticker_and_cik(a_base, cik_lookup)
     macro = _enrich_macro(providers)
 
     data_tables: dict[str, Any] = {}
-    if macro:
-        data_tables["macro"] = {
-            "headers": ["Macro indicator", "Value", "1W Δ", "As of"],
-            "rows": _macro_table(macro),
-        }
+    _add_macro_table_to(data_tables, macro)
 
     ctx = _build_ticker_context(
         ticker=primary_ticker,
@@ -861,16 +881,11 @@ def _build_conference(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None)
         "event_time": "11:00 AM IST",
     })
 
-    tpl = load_template("conference")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    return engine.build(context=ctx, data_tables=data_tables,
-                        data_sources=providers.sources if providers else [])
+    return _build_with_template("conference", ctx, data_tables, llm_call, providers)
 
 
 # -- KOL Meeting ----------------------------------------------------------
 def _build_kol_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
-    from calorch.templates import TemplateEngine, load_template
-
     a_base = _base(f"KOL Brief — {ev.subject}", ev, cls, ed)
     primary_ticker = (a_base.tickers or [None])[0]
 
@@ -887,27 +902,17 @@ def _build_kol_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None
         "primary_ticker": primary_ticker or "",
     }
 
-    tpl = load_template("kol_meeting")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    return engine.build(context=ctx,
-                        data_sources=providers.sources if providers else [])
+    return _build_with_template("kol_meeting", ctx, {}, llm_call, providers)
 
 
 # -- Channel Check ---------------------------------------------------------
 def _build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
-    from calorch.templates import TemplateEngine, load_template
-
     a_base = _base(f"Channel Check — {ev.subject}", ev, cls, ed)
-    primary_ticker = (a_base.tickers or [None])[0]
-    cik = cik_lookup(primary_ticker) if cik_lookup and primary_ticker else ""
+    primary_ticker, cik = _resolve_primary_ticker_and_cik(a_base, cik_lookup)
     macro = _enrich_macro(providers)
 
     data_tables: dict[str, Any] = {}
-    if macro:
-        data_tables["macro"] = {
-            "headers": ["Macro indicator", "Value", "1W Δ", "As of"],
-            "rows": _macro_table(macro),
-        }
+    _add_macro_table_to(data_tables, macro)
 
     ctx = _build_ticker_context(
         ticker=primary_ticker or "",
@@ -962,16 +967,13 @@ def _build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=No
         "conf_3": "—",
     })
 
-    tpl = load_template("channel_check")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    return engine.build(context=ctx, data_tables=data_tables,
-                        data_sources=providers.sources if providers else [])
+    return _build_with_template(
+        "channel_check", ctx, data_tables, llm_call, providers,
+    )
 
 
 # -- Portfolio Meeting ----------------------------------------------------
 def _build_portfolio_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
-    from calorch.templates import TemplateEngine, load_template
-
     a_base = _base(f"Portfolio Filing Brief — {ev.subject}", ev, cls, ed)
 
     data_tables: dict[str, Any] = {}
@@ -1038,16 +1040,13 @@ def _build_portfolio_meeting(ev, cls, ed, llm_call, *, providers=None, cik_looku
         "oil_wti": "$68.45",
     }
 
-    tpl = load_template("portfolio_meeting")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    return engine.build(context=ctx, data_tables=data_tables,
-                        data_sources=providers.sources if providers else [])
+    return _build_with_template(
+        "portfolio_meeting", ctx, data_tables, llm_call, providers,
+    )
 
 
 # -- Internal Review -------------------------------------------------------
 def _build_internal_review(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
-    from calorch.templates import TemplateEngine, load_template
-
     ctx = {
         "event_id": ev.id,
         "review_type": "Q2 Coverage Retro",
@@ -1066,19 +1065,13 @@ def _build_internal_review(ev, cls, ed, llm_call, *, providers=None, cik_lookup=
         "kol_calls": "3",
     }
 
-    tpl = load_template("internal_review")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    return engine.build(context=ctx,
-                        data_sources=providers.sources if providers else [])
+    return _build_with_template("internal_review", ctx, {}, llm_call, providers)
 
 
 # -- Analyst Meeting ------------------------------------------------------
 def _build_analyst_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
-    from calorch.templates import TemplateEngine, load_template
-
     a_base = _base(f"Analyst Meeting — {ev.subject}", ev, cls, ed)
-    primary_ticker = (a_base.tickers or [None])[0]
-    cik = cik_lookup(primary_ticker) if cik_lookup and primary_ticker else ""
+    primary_ticker, cik = _resolve_primary_ticker_and_cik(a_base, cik_lookup)
 
     ctx = _build_ticker_context(
         ticker=primary_ticker or "",
@@ -1099,10 +1092,7 @@ def _build_analyst_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=
         "analyst_target": ctx.get("mean_target", "—"),
     })
 
-    tpl = load_template("analyst_meeting")
-    engine = TemplateEngine(tpl, llm_client=llm_call)
-    return engine.build(context=ctx,
-                        data_sources=providers.sources if providers else [])
+    return _build_with_template("analyst_meeting", ctx, {}, llm_call, providers)
 
 
 # -- Unknown ---------------------------------------------------------------
