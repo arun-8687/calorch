@@ -50,6 +50,7 @@ check_quality.py
 *.docx
 *.pdf
 !data/**/*.docx
+!docs/prep_packs/*.docx
 
 # Secrets
 *.pem
