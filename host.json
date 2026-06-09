@@ -9,9 +9,8 @@
     },
     "logLevel": {
       "calorch": "Information",
-      "calorch.azure_durable": "Information",
-      "calorch.nodes": "Information",
-      "calorch.llm_enrich": "Warning"
+      "calorch.durable": "Information",
+      "calorch.nodes": "Information"
     }
   },
   "extensionBundle": {
@@ -30,14 +29,5 @@
       }
     }
   },
-  "functionTimeout": "00:30:00",
-  "healthMonitor": {
-    "enabled": true,
-    "healthCheckInterval": "00:00:10",
-    "healthCheckWindow": "00:02:00",
-    "maxAllowedFailures": 3,
-    "maxPercentUnhealthyFunctions": 10,
-    "maxPercentUnhealthyOrchestrators": 10,
-    "maxPercentUnhealthyActivities": 10
-  }
+  "functionTimeout": "00:30:00"
 }
