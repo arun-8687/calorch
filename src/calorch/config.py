@@ -91,6 +91,13 @@ class Settings:
     max_request_bytes: int
     cors_allowed_origins: list[str]
     rate_limit_per_minute: int
+    # Azure Blob Storage
+    azure_storage_connection_string: str | None
+    azure_storage_account_url: str | None
+    blob_input_container: str
+    blob_output_container: str
+    blob_local_root: Path | None  # LocalBlobStore root when Azure not configured
+
     audit_log_path: Path
 
 
@@ -142,4 +149,9 @@ def get_settings() -> Settings:
         cors_allowed_origins=_csv("CORS_ALLOWED_ORIGINS", ""),
         rate_limit_per_minute=int(_env("RATE_LIMIT_PER_MINUTE", "30") or "30"),
         audit_log_path=Path(_env("AUDIT_LOG_PATH", "./out/audit.jsonl") or "./out/audit.jsonl"),
+        azure_storage_connection_string=_env("AZURE_STORAGE_CONNECTION_STRING"),
+        azure_storage_account_url=_env("AZURE_STORAGE_ACCOUNT_URL"),
+        blob_input_container=_env("BLOB_INPUT_CONTAINER", "calorch-inputs") or "calorch-inputs",
+        blob_output_container=_env("BLOB_OUTPUT_CONTAINER", "calorch-outputs") or "calorch-outputs",
+        blob_local_root=Path(_env("BLOB_LOCAL_ROOT", "./out/blobs")) if _env("BLOB_LOCAL_ROOT") else None,
     )

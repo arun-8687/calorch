@@ -76,6 +76,7 @@ class Context:
     to_addresses: list[str] | None = None  # override recipients
     providers: Any = None                 # calorch.providers.ProviderBundle (free sources: FRED, iXBRL, EFTS)
     cik_lookup: Any = None                # callable(ticker) -> CIK (for iXBRL/EFTS enrichment)
+    blob_store: Any = None                # calorch.blob_store.BlobStore (or NullBlobStore)
 
     def out(self, name: str) -> Path:
         p = self.output_dir / name
@@ -416,6 +417,15 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
         ed = {"source": "fallback-mock", "snapshots": {}, "as_of": _now().isoformat()}
         errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
 
+    # --- 1b) persist input data to blob storage ---
+    if c.blob_store:
+        try:
+            from calorch.blob_store import input_blob_path
+            input_key = input_blob_path("enterprise", f"{run_name}/{event_name}")
+            c.blob_store.upload_json("calorch-inputs", input_key, ed, metadata={"event_id": ev.id, "run_id": run_name})
+        except (OSError, ValueError) as e:
+            log.warning("blob input upload failed for %s: %s", ev.id, e)
+
     # --- 2) analysis & DOCX ---
     analysis = None
     try:
@@ -432,6 +442,48 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
             sha256=sha256_file(doc_path),
             bytes=doc_path.stat().st_size,
         )
+        # --- 2b) persist DOCX to blob storage ---
+        if c.blob_store:
+            try:
+                from calorch.blob_store import output_blob_path
+                doc_blob = output_blob_path(run_name, event_name, f"{event_name}.docx")
+                blob_url = c.blob_store.upload_file(
+                    "calorch-outputs", doc_blob, doc_path,
+                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
+                )
+                documents[ev.id] = DocxArtifact(
+                    event_id=ev.id,
+                    path=str(doc_path),
+                    sha256=documents[ev.id].sha256,
+                    bytes=documents[ev.id].bytes,
+                    blob_url=blob_url,
+                )
+            except (OSError, ValueError) as e:
+                log.warning("blob DOCX upload failed for %s: %s", ev.id, e)
+        # --- 2c) persist analysis JSON to blob storage ---
+        if c.blob_store and analysis is not None:
+            try:
+                from calorch.blob_store import output_blob_path
+                analysis_blob = output_blob_path(run_name, event_name, f"{event_name}_analysis.json")
+                analysis_dict = {
+                    "event_id": analysis.event_id,
+                    "event_type": analysis.event_type.value,
+                    "title": analysis.title,
+                    "sections": analysis.sections,
+                    "tables": analysis.tables,
+                    "tickers": analysis.tickers,
+                    "source_attribution": analysis.source_attribution,
+                    "role_focus": analysis.role_focus,
+                    "confidence": analysis.confidence,
+                    "data_sources": analysis.data_sources,
+                }
+                c.blob_store.upload_json(
+                    "calorch-outputs", analysis_blob, analysis_dict,
+                    metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
+                )
+            except (OSError, ValueError) as e:
+                log.warning("blob analysis JSON upload failed for %s: %s", ev.id, e)
     except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
         log.exception("docx generation I/O failure for %s", ev.id)
         errors.append(f"docx:{ev.id}:{e!r}")
@@ -476,6 +528,28 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
             attachment_path=documents[ev.id].path if ev.id in documents else None,
             document_url=link_for_email,
         )
+        # --- 4b) persist HTML email to blob storage ---
+        if c.blob_store:
+            try:
+                from calorch.blob_store import output_blob_path
+                email_blob = output_blob_path(run_name, event_name, f"{event_name}.html")
+                email_blob_url = c.blob_store.upload_file(
+                    "calorch-outputs", email_blob, html_path,
+                    content_type="text/html",
+                    metadata={"event_id": ev.id, "run_id": run_name},
+                )
+                prepared_emails[ev.id] = PreparedEmailArtifact(
+                    event_id=ev.id,
+                    to=recipients,
+                    subject=subject,
+                    html_path=str(html_path),
+                    html=html_body,
+                    attachment_path=documents[ev.id].path if ev.id in documents else None,
+                    document_url=link_for_email,
+                    blob_url=email_blob_url,
+                )
+            except (OSError, ValueError) as e:
+                log.warning("blob HTML upload failed for %s: %s", ev.id, e)
     except (httpx.HTTPError, ConnectionError, TimeoutError, OSError, ValueError, KeyError) as e:
         log.exception("email preview generation failed for %s", ev.id)
         errors.append(f"email_preview:{ev.id}:{e!r}")
@@ -867,6 +941,21 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
         span.set_attribute("drafts", drafts)
         span.set_attribute("failed", len(failed))
 
+        # --- persist briefing to blob storage ---
+        briefing_blob_url = ""
+        if c.blob_store:
+            try:
+                from calorch.blob_store import briefing_blob_path
+                run_id = str(state.get("run_id", "run"))
+                bpath = briefing_blob_path(run_id)
+                briefing_blob_url = c.blob_store.upload_file(
+                    "calorch-outputs", bpath, out_path,
+                    content_type="text/html",
+                    metadata={"run_id": run_id},
+                )
+            except (OSError, ValueError) as e:
+                log.warning("blob briefing upload failed: %s", e)
+
         return {
             "weekly_briefing": WeeklyBriefing(
                 week_start=state["window_start"],
@@ -874,6 +963,7 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
                 sections=[{"heading": h, "body": "\n".join(items)} for h, items in sections],
                 event_count=len(state.get("events", [])),
                 path=str(out_path),
+                blob_url=briefing_blob_url,
             ),
             "log": [f"aggregate_briefing: {body}"],
         }

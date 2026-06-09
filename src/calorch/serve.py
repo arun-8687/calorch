@@ -203,6 +203,12 @@ def _build_context() -> Context:
     s = get_settings()
     out_dir = Path(os.getenv("OUTPUT_DIR", "/data/out"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    from calorch.blob_store import make_blob_store
+    blob = make_blob_store(
+        connection_string=s.azure_storage_connection_string,
+        account_url=s.azure_storage_account_url,
+        local_root=s.blob_local_root,
+    )
     ctx = Context(
         graph=make_graph_client(s),
         onedrive=make_onedrive_client(s),
@@ -213,6 +219,7 @@ def _build_context() -> Context:
         send_emails=False,            # always start in draft mode; caller approves
         providers=make_providers(s),
         cik_lookup=make_cik_lookup(s),
+        blob_store=blob,
     )
     set_context(ctx)
     return ctx

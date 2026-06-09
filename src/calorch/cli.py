@@ -38,6 +38,12 @@ log = logging.getLogger("calorch.cli")
 def build_context(*, send_emails: bool, output_dir: Path) -> Context:
     s = get_settings()
     output_dir.mkdir(parents=True, exist_ok=True)
+    from calorch.blob_store import make_blob_store
+    blob = make_blob_store(
+        connection_string=s.azure_storage_connection_string,
+        account_url=s.azure_storage_account_url,
+        local_root=s.blob_local_root,
+    )
     ctx = Context(
         graph=make_graph_client(s),
         onedrive=make_onedrive_client(s),
@@ -48,6 +54,7 @@ def build_context(*, send_emails: bool, output_dir: Path) -> Context:
         send_emails=send_emails,
         providers=make_providers(s),
         cik_lookup=make_cik_lookup(s),
+        blob_store=blob,
     )
     set_context(ctx)
     return ctx

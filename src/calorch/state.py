@@ -112,6 +112,7 @@ class DocxArtifact(BaseModel):
     path: str
     sha256: str
     bytes: int
+    blob_url: str = ""
 
 
 class EmailArtifact(BaseModel):
@@ -134,6 +135,7 @@ class PreparedEmailArtifact(BaseModel):
     html: str
     attachment_path: Optional[str] = None
     document_url: Optional[str] = None
+    blob_url: str = ""
 
 
 class FollowUpItem(BaseModel):
@@ -155,6 +157,7 @@ class WeeklyBriefing(BaseModel):
     sections: list[BriefingSection] = Field(default_factory=list)
     event_count: int = 0
     path: str = ""
+    blob_url: str = ""
 
 
 # ---------------------------------------------------------------------------

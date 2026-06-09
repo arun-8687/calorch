@@ -63,6 +63,11 @@ def base_settings() -> Settings:
         cors_allowed_origins=[],
         rate_limit_per_minute=30,
         audit_log_path=Path("./out/audit.jsonl"),
+        azure_storage_connection_string=None,
+        azure_storage_account_url=None,
+        blob_input_container="calorch-inputs",
+        blob_output_container="calorch-outputs",
+        blob_local_root=None,
     )
 
 
