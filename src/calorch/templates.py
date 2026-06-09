@@ -30,10 +30,19 @@ log = logging.getLogger("calorch.templates")
 _TPL_DIR = Path(__file__).parent.parent.parent / "data" / "templates"
 
 
-def load_template(event_type: str | EventType) -> dict[str, Any]:
-    """Load a template JSON by event type name."""
-    name = event_type.value if isinstance(event_type, EventType) else event_type
-    path = _TPL_DIR / f"{name}.json"
+def load_template(event_type: str | EventType | Path) -> dict[str, Any]:
+    """Load a template JSON.
+
+    Accepts a built-in template name / ``EventType`` (resolved under
+    ``data/templates/``), or an explicit ``Path`` to a template file. The
+    ``Path`` form lets out-of-tree agents ship their own template without
+    placing files inside the calorch package tree.
+    """
+    if isinstance(event_type, Path):
+        path = event_type
+    else:
+        name = event_type.value if isinstance(event_type, EventType) else event_type
+        path = _TPL_DIR / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"Template not found: {path}")
     return json.loads(path.read_text(encoding="utf-8"))

@@ -243,9 +243,19 @@ calorch/
 ├── src/calorch/
 │   ├── state.py                      # TypedDict state, Pydantic models, enums
 │   ├── config.py                     # Settings from environment
-│   ├── graph.py                      # StateGraph assembly (7 nodes, 2 fan-outs)
+│   ├── graph.py                      # StateGraph assembly (registry-driven agents)
 │   ├── nodes.py                      # Node functions + per-event pipeline
-│   ├── renderers.py                  # DOCX (python-docx) + HTML email builders
+│   ├── agents/                       # Modular per-event-type agents
+│   │   ├── base.py                   #   AgentSpec, registry, default subgraph factory
+│   │   └── builtin/                  #   one self-contained module per event type
+│   │       ├── earnings_call.py      #     keywords + analysis builder + register()
+│   │       └── ...                   #     (8 more)
+│   ├── durable/                      # Azure Durable Functions orchestration
+│   │   ├── orchestrator.py           #   timer + HTTP triggers, approval gate
+│   │   ├── activities.py             #   activities wrapping LangGraph agents
+│   │   └── state.py                  #   JSON (de)serialization adapter
+│   ├── analysis.py                   # EventAnalysis + shared builder toolkit
+│   ├── renderers.py                  # DOCX (python-docx) + HTML email rendering
 │   ├── _earnings_helpers.py          # Financial table builders + formatters
 │   ├── templates.py                  # Template engine — JSON → EventAnalysis
 │   ├── llm.py                        # LLM factory — Opencode Go → Azure → MockChatModel
@@ -337,6 +347,47 @@ python -m calorch.cli run --start 2026-06-01 --end 2026-06-08
 | `portfolio_meeting` | `portfolio_meeting.json` | Key movers, discussion items | FRED + H.15 (macro) |
 | `internal_review` | `internal_review.json` | Performance review, key questions, risk factors | N/A |
 | `analyst_meeting` | `analyst_meeting.json` | Executive summary, key questions, risk factors | Fundamentals |
+
+### Adding a new agent
+
+Each event-type agent is a self-contained module that registers an
+`AgentSpec` (classification keywords + analysis builder + optional custom
+subgraph). The orchestrator, the Durable Functions activities, the Send
+fan-out and the keyword classifier all consult the registry, so adding an
+agent touches nothing else.
+
+1. **Add the type** to `EventType` in `src/calorch/state.py` (the
+   classifier's typed vocabulary).
+2. **Write one module** that registers the agent:
+
+   ```python
+   # src/calorch/agents/builtin/ipo_roadshow.py
+   from calorch.agents.base import AgentSpec, register
+   from calorch.analysis import EventAnalysis, base_analysis, build_with_template
+   from calorch.state import EventType
+
+   def build_ipo_roadshow(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
+       a = base_analysis(f"IPO Roadshow — {ev.subject}", ev, cls, ed)
+       ctx = {"event_id": ev.id, "confidence": cls.confidence, "tickers": a.tickers}
+       return build_with_template("ipo_roadshow", ctx, {}, llm_call, providers)
+
+   register(AgentSpec(
+       event_type=EventType.IPO_ROADSHOW,
+       analysis_builder=build_ipo_roadshow,
+       keywords=("ipo", "roadshow", "s-1"),
+   ))
+   ```
+3. **Make it import.** For in-tree agents, add it to
+   `src/calorch/agents/builtin/__init__.py`. For deployment-specific agents
+   shipped outside the package, list the module path in the
+   `CALORCH_AGENT_MODULES` env var (comma-separated) — no repo edit needed.
+   Such agents can pass an absolute `Path` as the template to
+   `build_with_template`, so they need zero files inside the package tree.
+
+Agents needing a richer shape than the default single prepare node (extra
+tool nodes, inner loops) pass `graph_factory=` to `AgentSpec` to build
+their own `StateGraph`; it only has to honour `AgentInput`/`AgentOutput`.
+To replace a built-in agent, `register(..., replace=True)`.
 
 ---
 

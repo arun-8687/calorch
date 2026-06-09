@@ -80,6 +80,36 @@ class TestExtensibility:
         )
         assert spec.node_name == "agent_custom"
 
+    def test_out_of_tree_template_path(self, tmp_path):
+        """An agent can ship its own template file via an explicit Path."""
+        import json
+
+        from calorch.analysis import build_with_template
+
+        tpl = tmp_path / "custom.json"
+        tpl.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "event_type": "unknown",
+                    "report_header": {"title": "CUSTOM BRIEF"},
+                    "sections": [
+                        {
+                            "id": "overview",
+                            "title": "Overview",
+                            "source": "llm",
+                            "llm_method": "enrich_headline",
+                            "fallback": ["A custom out-of-tree agent brief."],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        a = build_with_template(tpl, {"event_id": "ev-x"}, {}, None, None)
+        assert a.title == "CUSTOM BRIEF"
+        assert [h for h, _ in a.sections] == ["Overview"]
+
 
 class TestDispatchIntegration:
     def test_build_analysis_dispatches_through_registry(self):

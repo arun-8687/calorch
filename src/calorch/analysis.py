@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -350,7 +351,7 @@ def ticker_context(
 # Template instantiation
 # ---------------------------------------------------------------------------
 def build_with_template(
-    template_name: str,
+    template: str | Path,
     context: dict[str, Any],
     data_tables: dict[str, Any] | None,
     llm_call: Any,
@@ -358,10 +359,14 @@ def build_with_template(
     *,
     analysis: EventAnalysis | None = None,
 ) -> EventAnalysis:
-    """Instantiate a template, run the TemplateEngine, return the EventAnalysis."""
+    """Instantiate a template, run the TemplateEngine, return the EventAnalysis.
+
+    ``template`` is a built-in template name or an explicit ``Path`` to a
+    template file (the latter lets out-of-tree agents ship their own).
+    """
     from calorch.templates import TemplateEngine, load_template
 
-    tpl = load_template(template_name)
+    tpl = load_template(template)
     engine = TemplateEngine(tpl, llm_client=llm_call)
     a = engine.build(
         context=context,
