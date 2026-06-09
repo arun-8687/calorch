@@ -262,13 +262,43 @@ class EftsNarrativeProvider:
 
 
 # ---------------------------------------------------------------------------
-# Factory — wired at startup, never uses stubs
+# Factory — wired at startup
 # ---------------------------------------------------------------------------
 def build_providers(settings: Any) -> ProviderBundle:
-    """Build ProviderBundle from live clients only.
+    """Build ProviderBundle.
+
+    When blob storage is configured and ``USE_BLOB_PROVIDERS=true`` (default),
+    reads pre-ingested data from Azure Blob Storage instead of making live API calls.
+    The data ingestion pipeline (data_ingestion.py) must have run first.
+
+    When blob storage is not configured or ``USE_BLOB_PROVIDERS=false``,
+    falls back to live API clients.
+    """
+    use_blob = getattr(settings, "use_blob_providers", True)
+    has_blob = bool(
+        getattr(settings, "azure_storage_connection_string", None)
+        or getattr(settings, "azure_storage_account_url", None)
+        or getattr(settings, "blob_local_root", None)
+    )
+
+    if use_blob and has_blob:
+        from calorch.blob_reader import build_blob_providers
+        from calorch.blob_store import make_blob_store
+        blob = make_blob_store(
+            connection_string=getattr(settings, "azure_storage_connection_string", None),
+            account_url=getattr(settings, "azure_storage_account_url", None),
+            local_root=getattr(settings, "blob_local_root", None),
+        )
+        return build_blob_providers(blob)
+
+    # ---- Fall back to live providers ----
+    return _build_live_providers(settings)
+
+
+def _build_live_providers(settings: Any) -> ProviderBundle:
+    """Build ProviderBundle from live clients.
 
     Every provider either works (real API) or returns empty data with a note.
-    No stub data is ever injected.
     """
     from .fred import FredClient
     from .fed_h15 import FedH15Client

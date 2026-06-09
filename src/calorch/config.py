@@ -97,6 +97,7 @@ class Settings:
     blob_input_container: str
     blob_output_container: str
     blob_local_root: Path | None  # LocalBlobStore root when Azure not configured
+    use_blob_providers: bool  # Read from blob instead of live API
 
     audit_log_path: Path
 
@@ -154,4 +155,5 @@ def get_settings() -> Settings:
         blob_input_container=_env("BLOB_INPUT_CONTAINER", "calorch-inputs") or "calorch-inputs",
         blob_output_container=_env("BLOB_OUTPUT_CONTAINER", "calorch-outputs") or "calorch-outputs",
         blob_local_root=Path(_env("BLOB_LOCAL_ROOT", "./out/blobs")) if _env("BLOB_LOCAL_ROOT") else None,
+        use_blob_providers=_bool("USE_BLOB_PROVIDERS", True),
     )

@@ -68,6 +68,7 @@ def base_settings() -> Settings:
         blob_input_container="calorch-inputs",
         blob_output_container="calorch-outputs",
         blob_local_root=None,
+        use_blob_providers=False,
     )
 
 
