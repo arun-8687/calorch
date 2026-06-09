@@ -83,8 +83,8 @@ class TestExtensibility:
 
 class TestDispatchIntegration:
     def test_build_analysis_dispatches_through_registry(self):
-        """renderers.build_analysis must use the registered builder."""
-        from calorch.renderers import build_analysis
+        """analysis.build_analysis must use the registered builder."""
+        from calorch.analysis import build_analysis
 
         original = get_agent(EventType.INTERNAL_REVIEW)
         calls = []

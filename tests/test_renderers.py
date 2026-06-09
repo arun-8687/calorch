@@ -4,12 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from calorch.renderers import (
-    EventAnalysis,
-    build_analysis,
-    render_docx,
-    render_html_email,
-)
+from calorch.analysis import EventAnalysis, build_analysis
+from calorch.renderers import render_docx, render_html_email
 from calorch.state import CalendarEvent, ClassificationResult, EventType
 
 

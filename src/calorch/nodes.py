@@ -26,9 +26,8 @@ from typing import Any, Iterable, Optional
 import httpx
 from langchain_core.runnables import RunnableConfig
 
+from calorch.analysis import EventAnalysis, build_analysis
 from calorch.renderers import (
-    EventAnalysis,
-    build_analysis,
     render_docx,
     render_html_email,
     sha256_bytes,
@@ -39,7 +38,6 @@ from calorch.state import (
     DocxArtifact,
     EmailArtifact,
     EventType,
-    EVENT_TYPE_TO_NODE,
     FollowUpItem,
     OrchestratorError,
     OrchestratorState,
@@ -231,7 +229,7 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
                     final_label=prev.pass1_label,
                     confidence=0.95,
                     rationale=prev.rationale + " (trusted)",
-                    routed_node=EVENT_TYPE_TO_NODE[prev.pass1_label],
+                    routed_node=prev.pass1_label.value,
                 )
                 results[ev.id] = out
                 continue
@@ -271,7 +269,7 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
             if not isinstance(out, ClassificationResult):
                 out = ClassificationResult.model_validate({**out, "event_id": ev.id})
             out.event_id = ev.id
-            out.routed_node = EVENT_TYPE_TO_NODE[out.final_label]
+            out.routed_node = out.final_label.value
             results[ev.id] = out
     return {
         "classifications": results,
@@ -321,7 +319,7 @@ def _parse_classification_json(text: str, event_id: str, prev: ClassificationRes
         final_label=final_label,
         confidence=confidence,
         rationale=rationale,
-        routed_node=EVENT_TYPE_TO_NODE[final_label],
+        routed_node=final_label.value,
     )
 
 
@@ -331,7 +329,7 @@ def _pass1_fallback(event_id: str, prev: ClassificationResult) -> Classification
         final_label=prev.pass1_label,
         confidence=0.4,
         rationale=f"LLM failed; using keyword hint ({prev.pass1_label.value})",
-        routed_node=EVENT_TYPE_TO_NODE[prev.pass1_label],
+        routed_node=prev.pass1_label.value,
     )
 
 

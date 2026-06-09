@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from calorch.renderers import build_analysis
+from calorch.analysis import build_analysis
 from calorch.state import CalendarEvent, ClassificationResult, EventType
 
 _ENTERPRISE_DATA = {

@@ -371,3 +371,33 @@ def build_with_template(
     if analysis:
         a.role_focus = analysis.role_focus
     return a
+
+
+# ---------------------------------------------------------------------------
+# Registry dispatch
+# ---------------------------------------------------------------------------
+def build_analysis(
+    event_type: EventType,
+    event: CalendarEvent,
+    cls: ClassificationResult,
+    enterprise_data: dict[str, Any],
+    llm_call,
+    *,
+    providers: Any = None,
+    cik_lookup: Any = None,
+) -> EventAnalysis:
+    """Run the analysis builder registered for ``event_type``.
+
+    The builder is resolved through the agent registry, so each event
+    type's analysis logic is declared in exactly one place — its module
+    under :mod:`calorch.agents.builtin`. ``providers`` is the calorch
+    ``ProviderBundle``; builders that accept it pull real macro context
+    (FRED/H.15), segment splits (SEC iXBRL) and guidance (SEC EFTS).
+    """
+    from calorch.agents import get_agent
+
+    with start_span("calorch.analysis.build", event_type=event_type.value):
+        return get_agent(event_type).analysis_builder(
+            event, cls, enterprise_data, llm_call,
+            providers=providers, cik_lookup=cik_lookup,
+        )

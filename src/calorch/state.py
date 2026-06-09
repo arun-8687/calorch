@@ -28,20 +28,9 @@ class EventType(str, Enum):
     UNKNOWN = "unknown"
 
 
-# Maps EventType to descriptive labels. The preparation branch dispatches
-# internally via ``build_analysis()``. These labels are kept for logging and
-# classification traceability; they are not graph node names.
-EVENT_TYPE_TO_NODE: dict[EventType, str] = {
-    EventType.EARNINGS_CALL: "earnings_call",
-    EventType.MANAGEMENT_MEETING: "management_meeting",
-    EventType.CONFERENCE: "conference",
-    EventType.KOL_MEETING: "kol_meeting",
-    EventType.CHANNEL_CHECK: "channel_check",
-    EventType.PORTFOLIO_MEETING: "portfolio_meeting",
-    EventType.INTERNAL_REVIEW: "internal_review",
-    EventType.ANALYST_MEETING: "analyst_meeting",
-    EventType.UNKNOWN: "unknown",
-}
+# The classifier records ``routed_node`` as the event type's value
+# (``ClassificationResult.routed_node``); the agent-node mapping for graph
+# wiring lives in the registry (calorch.agents.agent_node_names).
 
 
 # NOTE: the EventType → agent-node mapping now lives in the agent registry

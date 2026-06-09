@@ -25,7 +25,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import BaseModel
 
 from calorch.config import Settings
-from calorch.state import ClassificationResult, EventType, EVENT_TYPE_TO_NODE
+from calorch.state import ClassificationResult, EventType
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ def _heuristic_classify(messages: list[BaseMessage]) -> str:
         best, hits = max(counts.items(), key=lambda kv: kv[1])
         payload = {
             "final_label": best.value,
-            "routed_node": EVENT_TYPE_TO_NODE[best],
+            "routed_node": best.value,
             "confidence": min(0.99, 0.4 + 0.15 * hits),
             "rationale": f"keyword hits={dict(counts)}",
         }
