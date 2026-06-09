@@ -39,6 +39,7 @@ from calorch.state import (
     DocxArtifact,
     EmailArtifact,
     EventType,
+    EVENT_TYPE_TO_AGENT,
     EVENT_TYPE_TO_NODE,
     FollowUpItem,
     OrchestratorError,
@@ -343,20 +344,22 @@ def _pass1_fallback(event_id: str, prev: ClassificationResult) -> Classification
 # Routing / fan-out
 # ---------------------------------------------------------------------------
 def fan_out_prepare_events(state: OrchestratorState) -> list[Any] | str:
-    """Return one preparation branch per classified event.
+    """Return one agent subgraph per classified event.
 
-    Preparation is intentionally separate from mail delivery. This lets the
-    graph checkpoint reviewable artifacts before an optional human approval
-    interrupt, while keeping external email side effects after the gate.
+    Each event is routed to a type-specific agent subgraph (e.g.
+    ``agent_earnings_call``) via ``Send()``.  The subgraph runs the full
+    preparation pipeline (data fetch → analysis → render) and returns
+    per-event artifacts that the parent graph merges with its reducers.
     """
     from langgraph.types import Send
 
     sends: list[Send] = []
     for ev in state["events"]:
         cls = state["classifications"][ev.id]
+        agent_node = EVENT_TYPE_TO_AGENT[cls.final_label]
         sends.append(
             Send(
-                "prepare_event",
+                agent_node,
                 {
                     "event": ev.model_dump(mode="json"),
                     "classification": cls.model_dump(mode="json"),

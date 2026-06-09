@@ -50,9 +50,12 @@ def ctx(tmp_output):
 
 
 def test_graph_compiles():
+    from calorch.state import EventType, EVENT_TYPE_TO_AGENT
+
     g = make_graph()
     assert "scan_calendar" in g.nodes
-    assert "prepare_event" in g.nodes
+    for ev_type in EventType:
+        assert EVENT_TYPE_TO_AGENT[ev_type] in g.nodes
     assert "approval_gate" in g.nodes
     assert "deliver_event" in g.nodes
     assert "aggregate_briefing" in g.nodes

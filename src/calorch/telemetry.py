@@ -18,7 +18,7 @@ Span hierarchy:
     calorch.node.prefilter_keywords
     calorch.node.llm_classify
       calorch.llm.invoke (model, tokens)
-    calorch.node.prepare_event × N
+    calorch.agent.{event_type} × N
     calorch.node.approval_gate
     calorch.node.deliver_event × N
     calorch.node.aggregate_briefing

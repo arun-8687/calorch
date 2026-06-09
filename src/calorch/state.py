@@ -44,6 +44,20 @@ EVENT_TYPE_TO_NODE: dict[EventType, str] = {
 }
 
 
+# Maps EventType to the agent subgraph node name in the main graph.
+EVENT_TYPE_TO_AGENT: dict[EventType, str] = {
+    EventType.EARNINGS_CALL: "agent_earnings_call",
+    EventType.MANAGEMENT_MEETING: "agent_management_meeting",
+    EventType.CONFERENCE: "agent_conference",
+    EventType.KOL_MEETING: "agent_kol_meeting",
+    EventType.CHANNEL_CHECK: "agent_channel_check",
+    EventType.PORTFOLIO_MEETING: "agent_portfolio_meeting",
+    EventType.INTERNAL_REVIEW: "agent_internal_review",
+    EventType.ANALYST_MEETING: "agent_analyst_meeting",
+    EventType.UNKNOWN: "agent_unknown",
+}
+
+
 # ---------------------------------------------------------------------------
 # Domain objects
 # ---------------------------------------------------------------------------
@@ -201,6 +215,30 @@ class OrchestratorState(TypedDict, total=False):
     # ---- observability ----
     errors: Annotated[list[str], _append]
     log: Annotated[list[str], _append]
+
+
+# ---------------------------------------------------------------------------
+# Agent subgraph state (for multi-agent orchestration)
+# ---------------------------------------------------------------------------
+class AgentInput(TypedDict):
+    """Input keys passed to an agent subgraph via Send()."""
+    event: dict[str, Any]
+    classification: dict[str, Any]
+    run_id: str
+
+
+class AgentOutput(TypedDict):
+    """Output keys returned by an agent subgraph to the parent graph."""
+    documents: dict[str, DocxArtifact]
+    prepared_emails: dict[str, PreparedEmailArtifact]
+    calendar_links: dict[str, str]
+    errors: list[str]
+    log: list[str]
+
+
+class AgentState(AgentInput, AgentOutput):
+    """Full internal state of an agent subgraph."""
+    pass
 
 
 # ---------------------------------------------------------------------------
