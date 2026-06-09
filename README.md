@@ -309,6 +309,11 @@ $env:TIINGO_API_KEY      = "your-key"        # optional
 python -m calorch.cli run --start 2026-06-01 --end 2026-06-08
 ```
 
+**Deploying to Azure?** See
+[deploy/azure-functions.md](deploy/azure-functions.md) — the full guide
+for the Durable Functions orchestrator (provisioning, app settings, Graph
+app registration, smoke tests, CI/CD, troubleshooting).
+
 ---
 
 ## Environment Variables

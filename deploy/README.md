@@ -1,5 +1,11 @@
 # Azure deployment — Container Apps (Consumption)
 
+> **⚠️ Legacy path.** This guide deploys the FastAPI + LangGraph runtime on
+> Container Apps and predates the Durable Functions orchestrator. For the
+> current architecture (Azure Durable Functions + LangGraph agents), use
+> **[azure-functions.md](azure-functions.md)**. The cost table below also
+> predates Flex Consumption, which removes the 10-minute timeout objection.
+
 The most cost-effective production path: scales to zero when idle, ~$5/mo for ACR, <$1/mo per weekly run.
 
 ## Why not Functions / App Service?
