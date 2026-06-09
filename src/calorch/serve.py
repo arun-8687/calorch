@@ -14,10 +14,11 @@ In production, every POST /run creates a LangGraph thread. Configure
 """
 from __future__ import annotations
 
-import json
 import hmac
+import json
 import logging
 import os
+import re
 import signal
 import uuid
 from contextlib import asynccontextmanager
@@ -264,7 +265,7 @@ def _shutdown() -> None:
     try:
         close_client()
         log.info("HTTP client closed")
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         log.warning("Error closing HTTP client: %s", e)
 
 
@@ -437,7 +438,7 @@ def run(req: RunRequest) -> RunResponse:
         log.error("Run %s exceeded %ss timeout", thread_id, timeout)
         audit.run_timeout(thread_id=thread_id, timeout_seconds=timeout)
         raise HTTPException(504, f"run exceeded {timeout}s timeout") from exc
-    except Exception as exc:
+    except (RuntimeError, ValueError, OSError, KeyError, TypeError) as exc:
         log.error("Run %s failed: %s", thread_id, exc, exc_info=True)
         audit.run_failed(thread_id=thread_id, error=str(exc))
         raise
@@ -458,6 +459,8 @@ def run(req: RunRequest) -> RunResponse:
 )
 def approve_run(thread_id: str, req: ApprovalRequest) -> RunResponse:
     """Resume a run paused by ``approval_gate``."""
+    if not re.match(r"^[a-zA-Z0-9_-]+$", thread_id):
+        raise HTTPException(400, "Invalid thread_id: must be alphanumeric with dashes/underscores only")
     if _GRAPH is None:
         raise HTTPException(503, "not initialised")
     cfg = {"configurable": {"thread_id": thread_id}}
@@ -485,6 +488,8 @@ def approve_run(thread_id: str, req: ApprovalRequest) -> RunResponse:
 
 @app.get("/runs/{thread_id}", dependencies=[Depends(_require_api_key)])
 def get_run(thread_id: str) -> dict:
+    if not re.match(r"^[a-zA-Z0-9_-]+$", thread_id):
+        raise HTTPException(400, "Invalid thread_id")
     if _GRAPH is None:
         raise HTTPException(503, "not initialised")
     cfg = {"configurable": {"thread_id": thread_id}}
@@ -501,7 +506,7 @@ def get_run(thread_id: str) -> dict:
 def _safe(v) -> dict:
     try:
         return json.loads(json.dumps(v, default=str))
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return {"_unserialisable": str(type(v))}
 
 

@@ -18,8 +18,12 @@ Provider resolution at startup:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
+import httpx
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+
+log = logging.getLogger("calorch.providers")
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +97,8 @@ class FreeMacroProvider:
     def snapshot(self) -> dict[str, dict[str, Any]]:
         try:
             snap = self._fred.snapshot()
-        except Exception:
+        except (httpx.HTTPError, ConnectionError, TimeoutError, RuntimeError, ValueError, KeyError, AttributeError) as e:
+            log.warning("FRED snapshot failed: %s", e)
             snap = {}
         if self._fed_h15:
             try:
@@ -109,8 +114,8 @@ class FreeMacroProvider:
                             "series_id": sid, "series_name": h15_entry.get("series_name", sid),
                             "source": "fed-h15",
                         }
-            except Exception:
-                pass
+            except (httpx.HTTPError, ConnectionError, TimeoutError, RuntimeError, ValueError, KeyError, AttributeError) as e:
+                log.warning("FOMC H.15 snapshot failed: %s", e)
         for k, v in snap.items():
             if "source" not in v:
                 v["source"] = "fred"
@@ -129,7 +134,11 @@ class TiingoPriceProvider:
             return self._empty("TIINGO_API_KEY not set")
         try:
             return self._t.quote(ticker)
-        except Exception as e:
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("Tiingo quote failed for %s: %s", ticker, e)
+            return self._empty(f"Tiingo error: {e}")
+        except (ValueError, KeyError) as e:
+            log.warning("Tiingo quote parse error for %s: %s", ticker, e)
             return self._empty(f"Tiingo error: {e}")
 
     def ohlcv(self, ticker: str, *, days: int = 252) -> list[dict[str, Any]]:
@@ -137,7 +146,7 @@ class TiingoPriceProvider:
             return []
         try:
             return self._t.ohlcv(ticker, days=days)
-        except Exception:
+        except (httpx.HTTPError, ConnectionError, TimeoutError, ValueError, KeyError):
             return []
 
     @staticmethod
@@ -159,7 +168,11 @@ class TiingoConsensusProvider:
             return self._empty("TIINGO_API_KEY not set")
         try:
             return self._t.estimates(ticker)
-        except Exception as e:
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("Tiingo estimates network failure for %s: %s", ticker, e)
+            return self._empty(f"Tiingo error: {e}")
+        except (ValueError, KeyError) as e:
+            log.warning("Tiingo estimates parse error for %s: %s", ticker, e)
             return self._empty(f"Tiingo error: {e}")
 
     def recommendations(self, ticker: str) -> dict[str, Any]:
@@ -173,7 +186,11 @@ class TiingoConsensusProvider:
                 "low_target": est.get("low_target"), "as_of": est.get("as_of"),
                 "source": est.get("source", "tiingo"),
             }
-        except Exception as e:
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("Tiingo recommendations network failure for %s: %s", ticker, e)
+            return self._empty(f"Tiingo error: {e}")
+        except (ValueError, KeyError) as e:
+            log.warning("Tiingo recommendations parse error for %s: %s", ticker, e)
             return self._empty(f"Tiingo error: {e}")
 
     @staticmethod
@@ -198,8 +215,10 @@ class IxbrlSegmentProvider:
                 return self._ixbrl.latest_revenue_segments(cik, ticker)
             elif axis == "geographic":
                 return self._ixbrl.latest_revenue_geo(cik, ticker)
-        except Exception:
-            pass
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("iXBRL segments network failure for %s: %s", ticker, e)
+        except (ValueError, KeyError, TypeError) as e:
+            log.warning("iXBRL segments parse failure for %s: %s", ticker, e)
         return []
 
 
@@ -214,7 +233,11 @@ class IxbrlFundamentalsProvider:
             return {"source": "sec-ixbrl", "ticker": ticker, "note": "iXBRL client not available"}
         try:
             return self._ixbrl.latest_fundamentals(cik, ticker)
-        except Exception as e:
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("iXBRL fundamentals network failure for %s: %s", ticker, e)
+            return {"source": "sec-ixbrl", "ticker": ticker, "note": f"network error: {e}"}
+        except (ValueError, KeyError, TypeError) as e:
+            log.warning("iXBRL fundamentals parse failure for %s: %s", ticker, e)
             return {"source": "sec-ixbrl", "ticker": ticker, "note": str(e)}
 
 
@@ -230,7 +253,11 @@ class EftsNarrativeProvider:
             return []
         try:
             return self._efts.search_guidance(cik=cik, ticker=ticker, limit=limit)
-        except Exception:
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("EFTS guidance network failure for %s: %s", ticker, e)
+            return []
+        except (ValueError, KeyError) as e:
+            log.warning("EFTS guidance parse failure for %s: %s", ticker, e)
             return []
 
 
@@ -258,7 +285,7 @@ def build_providers(settings: Any) -> ProviderBundle:
         try:
             fred = FredClient(api_key=key, cache_dir=Path(".cache/fred"))
             sources.append({"source_name": "FRED", "status": "active", "detail": "Federal Reserve Economic Data"})
-        except Exception as e:
+        except (OSError, ValueError, ImportError) as e:
             sources.append({"source_name": "FRED", "status": "error", "detail": str(e)})
     else:
         sources.append({"source_name": "FRED", "status": "disabled", "detail": "USE_FRED=false"})
@@ -268,7 +295,7 @@ def build_providers(settings: Any) -> ProviderBundle:
         try:
             fed_h15 = FedH15Client(cache_dir=Path(".cache/fed"))
             sources.append({"source_name": "FOMC H.15", "status": "active", "detail": "US Treasury / Fed rates"})
-        except Exception as e:
+        except (OSError, ValueError, ImportError) as e:
             sources.append({"source_name": "FOMC H.15", "status": "error", "detail": str(e)})
 
     macro = FreeMacroProvider(fred=fred, fed_h15=fed_h15)
@@ -279,7 +306,7 @@ def build_providers(settings: Any) -> ProviderBundle:
         try:
             ixbrl = SecIxbrlClient(user_agent=settings.sec_user_agent, cache_dir=settings.sec_cache_dir / "ixbrl")
             sources.append({"source_name": "SEC iXBRL", "status": "active", "detail": "Company facts + segment revenue"})
-        except Exception as e:
+        except (OSError, ValueError, ImportError) as e:
             sources.append({"source_name": "SEC iXBRL", "status": "error", "detail": str(e)})
 
     segments = IxbrlSegmentProvider(ixbrl=ixbrl)
@@ -296,7 +323,7 @@ def build_providers(settings: Any) -> ProviderBundle:
         try:
             efts = SecEftsClient(user_agent=settings.sec_user_agent, cache_dir=settings.sec_cache_dir / "efts")
             sources.append({"source_name": "SEC EFTS", "status": "active", "detail": "Full-text filing search"})
-        except Exception as e:
+        except (OSError, ValueError, ImportError) as e:
             sources.append({"source_name": "SEC EFTS", "status": "error", "detail": str(e)})
 
     narrative = EftsNarrativeProvider(efts=efts)
@@ -307,7 +334,7 @@ def build_providers(settings: Any) -> ProviderBundle:
         try:
             tiingo = TiingoClient(api_key=settings.tiingo_api_key, cache_dir=Path(".cache/tiingo"))
             sources.append({"source_name": "Tiingo", "status": "active", "detail": "Prices + analyst estimates"})
-        except Exception as e:
+        except (OSError, ValueError, ImportError) as e:
             sources.append({"source_name": "Tiingo", "status": "error", "detail": str(e)})
     else:
         sources.append({"source_name": "Tiingo", "status": "missing", "detail": "TIINGO_API_KEY not set"})

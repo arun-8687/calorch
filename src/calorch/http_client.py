@@ -249,7 +249,7 @@ class HttpClient:
                 cb.record_success()
                 span.set_attribute("http.status_code", response.status_code)
                 yield response
-            except Exception as e:
+            except (httpx.HTTPError, httpx.InvalidURL, ConnectionError, TimeoutError, OSError) as e:
                 cb.record_failure()
                 span.set_attribute("error", str(e))
                 logger.error(

@@ -22,6 +22,8 @@ import json
 import logging
 from typing import Any
 
+from calorch.telemetry import start_span
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 log = logging.getLogger("calorch.llm_enrich")
@@ -124,14 +126,14 @@ class LlmEnricher:
         if self._llm is None:
             return ""
         try:
-            msgs = [SystemMessage(content=system), HumanMessage(content=user)]
-            resp = self._llm.invoke(msgs, max_tokens=max_tokens)
-            raw = resp.content if hasattr(resp, "content") else str(resp)
-            # Log first 200 chars for debugging
-            preview = raw[:200].replace("\n", "\\n")
-            log.info("LLM raw (%d chars, %d lines): %.200s", len(raw), raw.count("\n") + 1, raw[:200].replace("\n", "\\n"))
-            return raw
-        except Exception as exc:
+            with start_span("calorch.llm.enrich", max_tokens=max_tokens):
+                msgs = [SystemMessage(content=system), HumanMessage(content=user)]
+                resp = self._llm.invoke(msgs, max_tokens=max_tokens)
+                raw = resp.content if hasattr(resp, "content") else str(resp)
+                preview = raw[:200].replace("\n", "\\n")
+                log.info("LLM raw (%d chars, %d lines): %.200s", len(raw), raw.count("\n") + 1, raw[:200].replace("\n", "\\n"))
+                return raw
+        except (httpx.HTTPError, ConnectionError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
             log.warning("LLM enrichment call failed: %s", exc)
             return ""
 

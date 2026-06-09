@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import httpx
+from cachetools import TTLCache
 from lxml import etree
 
 from calorch.http_client import get_client
@@ -430,7 +431,7 @@ class SecIxbrlClient:
     # ------------------------------------------------------------------
     # Company Facts — consolidated fundamentals (free, no iXBRL parse)
     # ------------------------------------------------------------------
-    _CF_CACHE: dict[str, dict[str, Any]] = {}
+    _CF_CACHE: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=256, ttl=3600)
 
     def _fetch_companyfacts(self, cik: str) -> dict[str, Any]:
         if cik in self._CF_CACHE:
@@ -438,18 +439,18 @@ class SecIxbrlClient:
         url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
         self._rate_limit()
         try:
-            resp = httpx.get(url, headers={"User-Agent": self._ua}, timeout=30)
-            resp.raise_for_status()
+            resp = get_client().get(
+                url,
+                headers={"User-Agent": self._ua, "Accept-Encoding": "gzip"},
+                service="sec_ixbrl",
+            )
             data = resp.json()
             self._CF_CACHE[cik] = data
             return data
         except httpx.HTTPError as e:
-            # Network/HTTP-level failure — log and return empty so the caller
-            # can degrade gracefully (the renderer will fall back to "—")
             log.warning("SEC companyfacts fetch failed for CIK %s: %s", cik, e)
             return {}
         except (json.JSONDecodeError, ValueError) as e:
-            # SEC returned 200 but the body is not valid JSON
             log.warning("SEC companyfacts response malformed for CIK %s: %s", cik, e)
             return {}
 

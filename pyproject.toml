@@ -26,6 +26,7 @@ dependencies = [
   "fredapi>=0.5",
   "lxml>=5.0",
   "azure-cosmos>=4.16,<5.0",
+  "cachetools>=5.3",
 ]
 
 [project.optional-dependencies]

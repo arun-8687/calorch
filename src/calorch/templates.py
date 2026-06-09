@@ -232,7 +232,7 @@ def _fmt(template: str, ctx: dict[str, Any]) -> str:
     Missing keys are left as-is (e.g. '{missing}' stays literal)."""
     try:
         return template.format_map(_SafeDict(ctx))
-    except Exception:
+    except (KeyError, IndexError, ValueError, TypeError, AttributeError):
         return template
 
 

@@ -92,23 +92,20 @@ def test_extract_segment_facts_handles_garbage_input():
     assert parser.extract_segment_facts(b"") == []
 
 
-def test_sec_edgar_retries_throttled_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    class Response:
-        def __init__(self, status_code: int, payload: dict | None = None) -> None:
-            self.status_code = status_code
-            self.headers = {"Retry-After": "0"}
-            self._payload = payload or {}
+def test_sec_edgar_client_get_uses_shared_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify SecEdgarClient._get() delegates to the shared HTTP client."""
+    from unittest.mock import MagicMock
 
-        def raise_for_status(self) -> None:
-            if self.status_code >= 400:
-                raise AssertionError(f"unexpected status {self.status_code}")
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"ok": True}
+    mock_response.status_code = 200
 
-        def json(self) -> dict:
-            return self._payload
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+    monkeypatch.setattr("calorch.sec.get_client", lambda: mock_client)
 
-    responses = [Response(429), Response(200, {"ok": True})]
-    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: responses.pop(0))
-    monkeypatch.setattr("time.sleep", lambda *_: None)
     client = SecEdgarClient("test-agent", cache_dir=tmp_path)
     client._rl.wait = lambda: None
-    assert client._get("https://data.sec.gov/test") == {"ok": True}
+    result = client._get("https://data.sec.gov/test")
+    assert result == {"ok": True}
+    assert mock_client.get.called

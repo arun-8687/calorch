@@ -407,8 +407,12 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
         payload_tickers = [ev.sec_ticker]
     try:
         ed = c.enterprise.fetch(ev.subject, tickers=payload_tickers)
-    except Exception as e:
-        log.warning("enterprise data fetch failed for %s: %s", ev.id, e)
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+        log.warning("enterprise data network failure for %s: %s", ev.id, e)
+        ed = {"source": "fallback-mock", "snapshots": {}, "as_of": _now().isoformat()}
+        errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
+    except (ValueError, KeyError, TypeError) as e:
+        log.warning("enterprise data parse failure for %s: %s", ev.id, e)
         ed = {"source": "fallback-mock", "snapshots": {}, "as_of": _now().isoformat()}
         errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
 
@@ -428,8 +432,11 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
             sha256=sha256_file(doc_path),
             bytes=doc_path.stat().st_size,
         )
-    except Exception as e:
-        log.exception("docx generation failed for %s", ev.id)
+    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
+        log.exception("docx generation I/O failure for %s", ev.id)
+        errors.append(f"docx:{ev.id}:{e!r}")
+    except (ValueError, KeyError, TypeError) as e:
+        log.exception("docx generation data failure for %s", ev.id)
         errors.append(f"docx:{ev.id}:{e!r}")
 
     # --- 3) OneDrive upload ---
@@ -441,7 +448,7 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
                 remote_name=f"{run_name}-{event_name}.docx",
             )
             calendar_links[ev.id] = onedrive_url
-    except Exception as e:
+    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
         log.warning("onedrive upload failed for %s: %s", ev.id, e)
         errors.append(f"onedrive:{ev.id}:{e!r}")
     # For SEC events the canonical link is the EDGAR document — prefer that.
@@ -469,7 +476,7 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
             attachment_path=documents[ev.id].path if ev.id in documents else None,
             document_url=link_for_email,
         )
-    except Exception as e:
+    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError, ValueError, KeyError) as e:
         log.exception("email preview generation failed for %s", ev.id)
         errors.append(f"email_preview:{ev.id}:{e!r}")
 
@@ -668,11 +675,10 @@ def _deliver_event_inner(c, ev, cls, preview, document, onedrive_url, send_email
             status=status,
             graph_message_id=message_id,
         )
-    except Exception as e:
+    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
         log.exception("email delivery failed for %s", ev.id)
         errors.append(f"email:{ev.id}:{e!r}")
         status = "failed"
-        # Keep a recorded send draft replayable after transient failures.
         repo_status = "prepared" if send_emails and message_id else "failed"
 
     sec_link = ev.web_link or None
@@ -687,7 +693,7 @@ def _deliver_event_inner(c, ev, cls, preview, document, onedrive_url, send_email
                 }
             }
             c.graph.patch_event(ev.id, body)
-    except Exception as e:
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
         log.warning("patch_event failed for %s: %s", ev.id, e)
         errors.append(f"patch_event:{ev.id}:{e!r}")
 
@@ -698,7 +704,7 @@ def _deliver_event_inner(c, ev, cls, preview, document, onedrive_url, send_email
                 ev, cls, document, onedrive_url, delivery_key, repo_status, message_id
             ),
         )
-    except Exception as e:
+    except (OSError, ValueError, KeyError) as e:
         log.warning("repo.upsert failed for %s: %s", ev.id, e)
         errors.append(f"repo:{ev.id}:{e!r}")
 

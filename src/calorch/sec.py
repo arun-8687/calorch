@@ -22,6 +22,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import httpx
+from cachetools import TTLCache
+
+from calorch.http_client import get_client
 
 
 # SEC classifies forms into the orchestrator's 8 event types.
@@ -113,8 +116,11 @@ class TickerMap:
         if self._path and self._path.exists() and (datetime.now() - datetime.fromtimestamp(self._path.stat().st_mtime)) < timedelta(days=7):
             data = json.loads(self._path.read_text(encoding="utf-8"))
         else:
-            r = httpx.get(self._URL, headers={"User-Agent": self._ua, "Accept-Encoding": "gzip"}, timeout=30.0)
-            r.raise_for_status()
+            r = get_client().get(
+                self._URL,
+                headers={"User-Agent": self._ua, "Accept-Encoding": "gzip"},
+                service="sec_edgar",
+            )
             data = r.json()
             if self._path:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,34 +179,21 @@ class SecEdgarClient:
         cache = cache_dir or (Path.cwd() / ".cache" / "sec")
         cache.mkdir(parents=True, exist_ok=True)
         self._tickers = TickerMap(user_agent, cache_path=cache / "company_tickers.json")
-        self._facts_cache: dict[str, dict[str, Any]] = {}
-        self._sub_cache: dict[str, dict[str, Any]] = {}
+        self._facts_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=256, ttl=3600)
+        self._sub_cache: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=128, ttl=1800)
 
     # ---- HTTP ----
     def _get(self, url: str) -> dict[str, Any]:
-        last_error: Exception | None = None
-        for attempt in range(4):
-            self._rl.wait()
-            try:
-                r = httpx.get(
-                    url,
-                    headers={"User-Agent": self._ua, "Accept-Encoding": "gzip"},
-                    timeout=30.0,
-                )
-            except httpx.TransportError as exc:
-                last_error = exc
-                if attempt == 3:
-                    raise
-                time.sleep(min(2**attempt, 8))
-                continue
-            if r.status_code in {429, 500, 502, 503, 504} and attempt < 3:
-                retry_after = r.headers.get("Retry-After")
-                delay = float(retry_after) if retry_after and retry_after.isdigit() else min(2**attempt, 8)
-                time.sleep(delay)
-                continue
-            r.raise_for_status()
+        self._rl.wait()
+        try:
+            r = get_client().get(
+                url,
+                headers={"User-Agent": self._ua, "Accept-Encoding": "gzip"},
+                service="sec_edgar",
+            )
             return r.json()
-        raise RuntimeError(f"SEC request failed after retries: {last_error!r}")
+        except httpx.HTTPError:
+            raise
 
     # ---- public ----
     def cik_for(self, ticker: str) -> str | None:

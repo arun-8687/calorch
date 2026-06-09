@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import html
 import logging
+
+from calorch.telemetry import start_span
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -137,6 +139,11 @@ def _set_doc_defaults(doc: Document) -> None:
 # Per-event-type renderers
 # ---------------------------------------------------------------------------
 def render_docx(analysis: EventAnalysis, event: CalendarEvent, out_path: Path) -> Path:
+    with start_span("calorch.render.docx", event_id=event.id, event_type=analysis.event_type.value):
+        return _render_docx_inner(analysis, event, out_path)
+
+
+def _render_docx_inner(analysis: EventAnalysis, event: CalendarEvent, out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document()
     _set_doc_defaults(doc)
@@ -254,6 +261,11 @@ def _confidence_badge(c: float) -> str:
 
 
 def render_html_email(analysis: EventAnalysis, event: CalendarEvent, doc_link: str | None, *, link_label: str = "Open DOCX") -> str:
+    with start_span("calorch.render.html_email", event_id=event.id, event_type=analysis.event_type.value):
+        return _render_html_email_inner(analysis, event, doc_link, link_label=link_label)
+
+
+def _render_html_email_inner(analysis: EventAnalysis, event: CalendarEvent, doc_link: str | None, *, link_label: str = "Open DOCX") -> str:
     snap = analysis.tables[0] if analysis.tables else None
     snap_html = ""
     if snap:
@@ -331,19 +343,20 @@ def build_analysis(
     (FRED/H.15), real segment splits (SEC iXBRL), and real guidance
     excerpts (SEC EFTS) for the first ticker on the event.
     """
-    builder_map = {
-        EventType.EARNINGS_CALL: _build_earnings_call,
-        EventType.MANAGEMENT_MEETING: _build_management_meeting,
-        EventType.CONFERENCE: _build_conference,
-        EventType.KOL_MEETING: _build_kol_meeting,
-        EventType.CHANNEL_CHECK: _build_channel_check,
-        EventType.PORTFOLIO_MEETING: _build_portfolio_meeting,
-        EventType.INTERNAL_REVIEW: _build_internal_review,
-        EventType.ANALYST_MEETING: _build_analyst_meeting,
-        EventType.UNKNOWN: _build_unknown,
-    }
-    return builder_map[event_type](event, cls, enterprise_data, llm_call,
-                                   providers=providers, cik_lookup=cik_lookup)
+    with start_span("calorch.render.build_analysis", event_type=event_type.value) as span:
+        builder_map = {
+            EventType.EARNINGS_CALL: _build_earnings_call,
+            EventType.MANAGEMENT_MEETING: _build_management_meeting,
+            EventType.CONFERENCE: _build_conference,
+            EventType.KOL_MEETING: _build_kol_meeting,
+            EventType.CHANNEL_CHECK: _build_channel_check,
+            EventType.PORTFOLIO_MEETING: _build_portfolio_meeting,
+            EventType.INTERNAL_REVIEW: _build_internal_review,
+            EventType.ANALYST_MEETING: _build_analyst_meeting,
+            EventType.UNKNOWN: _build_unknown,
+        }
+        return builder_map[event_type](event, cls, enterprise_data, llm_call,
+                                       providers=providers, cik_lookup=cik_lookup)
 
 
 def _tickers_from_subject(subject: str) -> list[str]:
