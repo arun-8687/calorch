@@ -44,18 +44,8 @@ EVENT_TYPE_TO_NODE: dict[EventType, str] = {
 }
 
 
-# Maps EventType to the agent subgraph node name in the main graph.
-EVENT_TYPE_TO_AGENT: dict[EventType, str] = {
-    EventType.EARNINGS_CALL: "agent_earnings_call",
-    EventType.MANAGEMENT_MEETING: "agent_management_meeting",
-    EventType.CONFERENCE: "agent_conference",
-    EventType.KOL_MEETING: "agent_kol_meeting",
-    EventType.CHANNEL_CHECK: "agent_channel_check",
-    EventType.PORTFOLIO_MEETING: "agent_portfolio_meeting",
-    EventType.INTERNAL_REVIEW: "agent_internal_review",
-    EventType.ANALYST_MEETING: "agent_analyst_meeting",
-    EventType.UNKNOWN: "agent_unknown",
-}
+# NOTE: the EventType → agent-node mapping now lives in the agent registry
+# (calorch.agents.agent_node_names); each agent module declares its own.
 
 
 # ---------------------------------------------------------------------------

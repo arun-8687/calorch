@@ -39,7 +39,6 @@ from calorch.state import (
     DocxArtifact,
     EmailArtifact,
     EventType,
-    EVENT_TYPE_TO_AGENT,
     EVENT_TYPE_TO_NODE,
     FollowUpItem,
     OrchestratorError,
@@ -144,21 +143,16 @@ def scan_calendar(state: OrchestratorState, config: Optional[RunnableConfig] = N
 # ---------------------------------------------------------------------------
 # Classification stage
 # ---------------------------------------------------------------------------
-_KEYWORDS: dict[EventType, tuple[str, ...]] = {
-    EventType.EARNINGS_CALL: ("earnings", "results", "guidance", "q1", "q2", "q3", "q4", "fy"),
-    EventType.MANAGEMENT_MEETING: ("ceo", "cfo", "cro", "cto", "1on1", "1:1", "town hall", "mgmt"),
-    EventType.CONFERENCE: ("conference", "summit", "expo", "investor day", "cmd", "capital markets day"),
-    EventType.KOL_MEETING: ("kol", "expert", "consultant", "thought leader", "kolsight"),
-    EventType.CHANNEL_CHECK: ("channel", "distributor", "reseller", "channel partner", "var"),
-    EventType.PORTFOLIO_MEETING: ("portfolio", "ic ", "investment committee", "holdings"),
-    EventType.INTERNAL_REVIEW: ("internal", "retro", "postmortem", "sprint review", "team meeting"),
-    EventType.ANALYST_MEETING: ("analyst", "broker", "sell-side", "buy-side"),
-}
+def _keywords() -> dict[EventType, tuple[str, ...]]:
+    """Pass-1 keywords, declared per agent in calorch.agents modules."""
+    from calorch.agents import classification_keywords
+
+    return classification_keywords()
 
 
 def _keyword_score(blob: str) -> tuple[EventType, int, dict[EventType, int]]:
     counts: dict[EventType, int] = {}
-    for ev, kws in _KEYWORDS.items():
+    for ev, kws in _keywords().items():
         c = sum(blob.count(k) for k in kws)
         if c:
             counts[ev] = c
@@ -354,10 +348,12 @@ def fan_out_prepare_events(state: OrchestratorState) -> list[Any] | str:
     """
     from langgraph.types import Send
 
+    from calorch.agents import get_agent
+
     sends: list[Send] = []
     for ev in state["events"]:
         cls = state["classifications"][ev.id]
-        agent_node = EVENT_TYPE_TO_AGENT[cls.final_label]
+        agent_node = get_agent(cls.final_label).node_name
         sends.append(
             Send(
                 agent_node,

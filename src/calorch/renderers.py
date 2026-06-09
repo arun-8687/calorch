@@ -343,20 +343,15 @@ def build_analysis(
     (FRED/H.15), real segment splits (SEC iXBRL), and real guidance
     excerpts (SEC EFTS) for the first ticker on the event.
     """
+    # Dispatch through the agent registry so each event type's builder is
+    # declared in exactly one place (its calorch.agents module).
+    from calorch.agents import get_agent
+
     with start_span("calorch.render.build_analysis", event_type=event_type.value) as span:
-        builder_map = {
-            EventType.EARNINGS_CALL: _build_earnings_call,
-            EventType.MANAGEMENT_MEETING: _build_management_meeting,
-            EventType.CONFERENCE: _build_conference,
-            EventType.KOL_MEETING: _build_kol_meeting,
-            EventType.CHANNEL_CHECK: _build_channel_check,
-            EventType.PORTFOLIO_MEETING: _build_portfolio_meeting,
-            EventType.INTERNAL_REVIEW: _build_internal_review,
-            EventType.ANALYST_MEETING: _build_analyst_meeting,
-            EventType.UNKNOWN: _build_unknown,
-        }
-        return builder_map[event_type](event, cls, enterprise_data, llm_call,
-                                       providers=providers, cik_lookup=cik_lookup)
+        return get_agent(event_type).analysis_builder(
+            event, cls, enterprise_data, llm_call,
+            providers=providers, cik_lookup=cik_lookup,
+        )
 
 
 def _tickers_from_subject(subject: str) -> list[str]:
