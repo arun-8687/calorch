@@ -28,7 +28,8 @@ dependencies = [
   "azure-cosmos>=4.16,<5.0",
   "azure-storage-blob>=12.20",
   "azure-identity>=1.16",
-  "azure-functions>=2.0",
+  # azure-functions 2.x requires Python >=3.13; stay on 1.x for 3.11/3.12.
+  "azure-functions>=1.21,<2.0",
   "azure-functions-durable>=1.5",
   "cachetools>=5.3",
 ]
@@ -48,7 +49,7 @@ otel = [
 azure = [
   "azure-storage-blob>=12.20",
   "azure-identity>=1.16",
-  "azure-functions>=2.0",
+  "azure-functions>=1.21,<2.0",
   "azure-functions-durable>=1.5",
 ]
 
