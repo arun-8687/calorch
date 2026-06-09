@@ -32,7 +32,7 @@ def build_earnings_call(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
         _build_quote_box, _build_last_quarter_table, _build_consensus_table,
         _build_financial_metrics_table, _build_valuation_table, _build_balance_sheet_table,
         _build_analyst_sentiment_table, _build_segment_table_pct, _build_geo_table_pct,
-        _build_esg_snapshot, _build_recent_performance, _build_recent_performance_rows,
+        _build_recent_performance_rows,
     )
 
     a_base = base_analysis(f"Earnings Filing Brief — {ev.subject}", ev, cls, ed)

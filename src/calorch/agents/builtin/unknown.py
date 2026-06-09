@@ -6,8 +6,6 @@ have no registered agent.
 """
 from __future__ import annotations
 
-from typing import Any
-
 from calorch.agents.base import AgentSpec, register
 from calorch.analysis import EventAnalysis, base_analysis
 from calorch.state import EventType

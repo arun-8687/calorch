@@ -26,11 +26,10 @@ from typing import Any, Iterable, Optional
 import httpx
 from langchain_core.runnables import RunnableConfig
 
-from calorch.analysis import EventAnalysis, build_analysis
+from calorch.analysis import build_analysis
 from calorch.renderers import (
     render_docx,
     render_html_email,
-    sha256_bytes,
     write_text,
 )
 from calorch.state import (

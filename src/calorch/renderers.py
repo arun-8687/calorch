@@ -17,7 +17,7 @@ import html
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
