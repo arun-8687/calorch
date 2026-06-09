@@ -1,0 +1,43 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Request"
+      }
+    },
+    "logLevel": {
+      "calorch": "Information",
+      "calorch.azure_durable": "Information",
+      "calorch.nodes": "Information",
+      "calorch.llm_enrich": "Warning"
+    }
+  },
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[4.*, 5.0.0)"
+  },
+  "extensions": {
+    "durableTask": {
+      "hubName": "CalorchTaskHub",
+      "storageProvider": {
+        "connectionStringName": "AzureWebJobsStorage"
+      },
+      "tracing": {
+        "traceInputsAndOutputs": false,
+        "traceReplayEvents": false
+      }
+    }
+  },
+  "functionTimeout": "00:30:00",
+  "healthMonitor": {
+    "enabled": true,
+    "healthCheckInterval": "00:00:10",
+    "healthCheckWindow": "00:02:00",
+    "maxAllowedFailures": 3,
+    "maxPercentUnhealthyFunctions": 10,
+    "maxPercentUnhealthyOrchestrators": 10,
+    "maxPercentUnhealthyActivities": 10
+  }
+}

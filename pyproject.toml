@@ -28,6 +28,8 @@ dependencies = [
   "azure-cosmos>=4.16,<5.0",
   "azure-storage-blob>=12.20",
   "azure-identity>=1.16",
+  "azure-functions>=2.0",
+  "azure-functions-durable>=1.5",
   "cachetools>=5.3",
 ]
 
