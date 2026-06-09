@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from calorch.llm_enrich import LlmEnricher, NoOpEnricher
-from calorch.renderers import EventAnalysis
+from calorch.analysis import EventAnalysis
 from calorch.state import EventType
 
 log = logging.getLogger("calorch.templates")
