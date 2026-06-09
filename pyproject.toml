@@ -38,6 +38,7 @@ dependencies = [
 dev = [
   "langgraph-cli",
   "langgraph-sdk",
+  "markdown-it-py",   # scripts/render_architecture.py
 ]
 otel = [
   "opentelemetry-api>=1.27",

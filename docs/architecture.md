@@ -1,8 +1,9 @@
-# calorch — Solution Architecture (Azure Container Apps)
+# calorch — Solution Architecture (Azure Durable Functions)
 
 > End-to-end architecture of the Calendar-Driven Intelligent Workflow
-> Orchestrator, deployed on Azure Container Apps (Consumption tier).
-> Covers data sources, classification, parallel fan-out, delivery,
+> Orchestrator, deployed as an **Azure Durable Functions** app with
+> **LangGraph** multi-agent subgraphs inside activities. Covers triggers,
+> orchestration, parallel fan-out, the approval gate, delivery,
 > persistence, governance, and observability.
 
 ---
@@ -12,72 +13,72 @@
 ```mermaid
 flowchart TB
     subgraph TRIGGERS["⏰ Triggers"]
-        CRON["ACA cron scale rule<br/>0 6 * * MON"]
-        API["POST /run<br/>(HTTP)"]
+        TIMER["Timer trigger<br/>CRON_SCHEDULE (Mon 09:00 UTC)"]
+        API["POST /api/run<br/>(on-demand)"]
+        APPROVE["POST /api/approval/{id}<br/>(human approval)"]
     end
 
-    subgraph ACA["Azure Container Apps (calorch)"]
-        LB["Ingress / FQDN<br/>FastAPI :8000"]
-        GRAPH["StateGraph<br/>(LangGraph)"]
+    subgraph FUNC["Azure Function App · calorch · Python 3.11 · Flex Consumption"]
+        ORC["calorch_orchestrator<br/>(Durable · deterministic replay)"]
 
-        subgraph FRONT["Front stage"]
-            SCAN["scan_calendar<br/>Graph + SEC EDGAR"]
-            KW["prefilter_keywords<br/>Pass 1"]
-            LLM["llm_classify<br/>Pass 2 · GPT-4o SO"]
+        subgraph FRONT["Front stage (activities)"]
+            SCAN["activity_scan_calendar<br/>Graph calendarView"]
+            CLS["activity_classify<br/>Pass 1 keywords/SEC + Pass 2 LLM"]
         end
 
-        subgraph FANOUT["Prepare fan-out (Send API, parallel)"]
-            P1["prepare_event #1"]
-            P2["prepare_event #2"]
-            PN["prepare_event #N"]
+        subgraph FANOUT["Agent fan-out · task_all (parallel)"]
+            A1["activity_agent #1"]
+            A2["activity_agent #2"]
+            AN["activity_agent #N"]
         end
 
-        GATE["approval_gate<br/>interrupt() before send"]
-        DELIVER["deliver_event fan-out<br/>draft/send · patch · repo"]
-        AGG["aggregate_briefing<br/>weekly.html"]
+        GATE["approval gate<br/>wait_for_external_event ⟂ durable timer"]
+        DELIVER["activity_deliver fan-out · task_all<br/>draft/send · patch · repo"]
+        AGG["activity_aggregate_briefing<br/>weekly.html"]
+    end
+
+    subgraph AGENT["Inside activity_agent · LangGraph"]
+        REG["agent registry<br/>make_agent_subgraph(event_type)"]
+        PREP["prepare node<br/>data → analysis → DOCX/HTML"]
+        REG --> PREP
     end
 
     subgraph EXTERNAL["External services"]
         M365["Microsoft 365<br/>Graph · Outlook · OneDrive"]
-        SEC["SEC EDGAR<br/>submissions · XBRL · tickers"]
-        OPENAI["Azure OpenAI<br/>GPT-4o · Structured Output"]
+        SEC["SEC EDGAR · FRED · FOMC H.15 · Tiingo"]
+        OPENAI["Azure OpenAI<br/>classify + enrich"]
     end
 
     subgraph AZURE["Azure platform"]
-        COSMOS[("Cosmos DB<br/>events container")]
-        PG[("PostgreSQL<br/>LangGraph checkpoints")]
-        ACR[("ACR Basic<br/>calorch:tag")]
-        LAW[("Log Analytics<br/>App Insights")]
-        KEYVAULT[("Key Vault<br/>secrets")]
+        STG[("Storage account<br/>CalorchTaskHub + calorch-inputs/outputs")]
+        COSMOS[("Cosmos DB<br/>delivery idempotency")]
+        AI[("App Insights<br/>Log Analytics")]
+        KV[("Key Vault<br/>secrets")]
     end
 
     subgraph OBS["Observability"]
-        SM["LangSmith<br/>traces · evals"]
+        SM["LangSmith<br/>agent traces · evals"]
     end
 
-    CRON --> LB
-    API --> LB
-    LB --> GRAPH
-    GRAPH --> SCAN --> KW --> LLM
-    LLM --> P1
-    LLM --> P2
-    LLM --> PN
-    P1 & P2 & PN --> GATE --> DELIVER --> AGG
+    TIMER --> ORC
+    API --> ORC
+    ORC --> SCAN --> CLS
+    CLS --> A1 & A2 & AN
+    A1 & A2 & AN --> GATE --> DELIVER --> AGG
+    APPROVE -.->|raise_event| GATE
 
+    A1 -.-> AGENT
     SCAN <-->|read| M365
-    SCAN <-->|read| SEC
-    LLM <-->|invoke| OPENAI
-    P1 & P2 & PN <-->|read| M365
-    P1 & P2 & PN <-->|XBRL fallback| SEC
+    CLS <-->|invoke| OPENAI
+    PREP <-->|read| SEC
+    PREP <-->|enrich| OPENAI
     DELIVER <-->|draft/send + patch| M365
     DELIVER -->|upsert| COSMOS
-    P1 & P2 & PN -.->|upload| M365
-    GATE -.->|checkpoint| PG
-
-    GRAPH -.->|traces| SM
-    ACA -->|logs| LAW
-    KEYVAULT -.->|secrets| ACA
-    ACR -.->|pull| ACA
+    ORC <-->|checkpoint| STG
+    PREP -.->|artifacts| STG
+    PREP -.->|traces| SM
+    FUNC -->|logs/metrics| AI
+    KV -.->|secrets| FUNC
 ```
 
 ---
@@ -91,108 +92,110 @@ flowchart TB
     classDef stage fill:#DBEAFE,stroke:#1D4ED8,color:#1E3A8A
     classDef parallel fill:#FEF3C7,stroke:#D97706,color:#78350F
     classDef external fill:#F3E8FF,stroke:#7C3AED,color:#581C87
-    classDef azure fill:#E0E7FF,stroke:#4338CA,color:#312E81
     classDef store fill:#DCFCE7,stroke:#15803D,color:#14532D
     classDef obs fill:#FCE7F3,stroke:#BE185D,color:#831843
 
     %% ====== TRIGGERS ======
     subgraph T1["TRIGGERS"]
         direction TB
-        CRON["ACA cron scale rule<br/>(KEDA · weekly)"]:::trigger
-        HTTPC["POST /run<br/>(on-demand)"]:::trigger
-        INT["interrupt()<br/>approval_gate<br/>(human approval)"]:::trigger
+        TIMER["Timer trigger<br/>CRON_SCHEDULE · weekly"]:::trigger
+        HTTPC["POST /api/run<br/>(on-demand)"]:::trigger
+        EXT["POST /api/approval/{id}<br/>raise_event('approval')"]:::trigger
     end
 
-    %% ====== AZURE CONTAINER APPS ======
-    subgraph T2["AZURE CONTAINER APPS  ·  rg-calorch-prod  ·  eastus"]
+    %% ====== FUNCTION APP ======
+    subgraph T2["AZURE FUNCTION APP · rg-calorch-prod · Flex Consumption"]
         direction TB
-        subgraph T2A["Container App: calorch  (1 vCPU · 2 Gi · min=0 max=3)"]
+        subgraph T2A["Durable Functions host (scale 0→N)"]
             direction TB
-            INGRESS["Ingress / FQDN<br/>HTTPS · managed cert"]:::container
-            SERVE["FastAPI · uvicorn<br/>calorch.serve:app"]:::container
-            CHECK["PostgresSaver<br/>(durable thread checkpoint)"]:::container
+            ORC["calorch_orchestrator<br/>deterministic · no I/O<br/>run_id = current_utc_datetime"]:::container
+            HUB["Task hub (Azure Storage)<br/>history · instances · queues"]:::container
 
-            subgraph T2B["LangGraph StateGraph"]
+            subgraph T2B["Orchestrated activities"]
                 direction LR
-                N1["scan_calendar<br/>(Graph + SEC adapter)"]:::stage
-                N2["prefilter_keywords<br/>Pass 1 · zero-cost"]:::stage
-                N3["llm_classify<br/>Pass 2 · typed enum"]:::stage
-                N1 --> N2 --> N3
+                N1["activity_scan_calendar<br/>(Graph)"]:::stage
+                N2["activity_classify<br/>Pass 1 + Pass 2"]:::stage
+                N1 --> N2
 
-                subgraph T2C["PREPARE FAN-OUT  (Send API)"]
+                subgraph T2C["AGENT FAN-OUT  (task_all)"]
                     direction TB
-                    W1["prepare #1<br/>enrich→docx→html→drive"]:::parallel
-                    W2["prepare #2"]:::parallel
-                    WN["prepare #N<br/>(1,000+ events/wk)"]:::parallel
+                    W1["activity_agent #1<br/>LangGraph subgraph"]:::parallel
+                    W2["activity_agent #2"]:::parallel
+                    WN["activity_agent #N"]:::parallel
                 end
-                N3 -.->|"Send(payload)"| W1
-                N3 -.->|"Send(payload)"| W2
-                N3 -.->|"Send(payload)"| WN
+                N2 -.->|"task_all([...])"| W1
+                N2 -.->|"task_all([...])"| W2
+                N2 -.->|"task_all([...])"| WN
 
-                GATE["approval_gate<br/>interrupt() before requested send"]:::stage
-                DELIVER["deliver_event fan-out<br/>draft/send→calendar→repo"]:::parallel
-                N4["aggregate_briefing<br/>cross-event summary"]:::stage
+                GATE["approval gate<br/>wait_for_external_event<br/>⟂ create_timer(24h)"]:::stage
+                DELIVER["activity_deliver fan-out<br/>draft/send → calendar → repo"]:::parallel
+                N4["activity_aggregate_briefing<br/>cross-event summary"]:::stage
                 W1 & W2 & WN --> GATE --> DELIVER --> N4
             end
-            INGRESS --> SERVE --> CHECK
-            SERVE --> N1
+            ORC --> N1
+            ORC <--> HUB
+            ORC --> GATE
         end
     end
+
+    %% ====== AGENT REGISTRY ======
+    subgraph T2D["AGENT REGISTRY (calorch.agents)"]
+        direction TB
+        SPEC["AgentSpec per event type<br/>keywords · analysis_builder · graph_factory"]:::container
+        FACT["make_agent_subgraph(type)<br/>compiled StateGraph"]:::container
+        SPEC --> FACT
+    end
+    W1 & W2 & WN -.->|invoke| FACT
 
     %% ====== EXTERNAL SERVICES ======
     subgraph T3["EXTERNAL SERVICES"]
         direction TB
         subgraph T3A["Microsoft 365 tenant"]
-            M1["Graph API<br/>/me/calendar/calendarView"]:::external
-            M2["Graph API<br/>sendMail / createDraft"]:::external
-            M3["OneDrive for Business<br/>DOCX archive"]:::external
+            M1["Graph · /me/calendar/calendarView"]:::external
+            M2["Graph · sendMail / createDraft"]:::external
+            M3["OneDrive · DOCX archive"]:::external
         end
-        subgraph T3B["SEC EDGAR  (data.sec.gov)"]
-            S1["submissions/CIK{cik}.json<br/>filings list"]:::external
-            S2["xbrl/companyfacts/<br/>CIK{cik}.json"]:::external
-            S3["company_tickers.json<br/>(CIK ↔ ticker)"]:::external
+        subgraph T3B["Free data (data.sec.gov, FRED, FOMC)"]
+            S1["SEC submissions + companyfacts"]:::external
+            S2["FRED + FOMC H.15 macro"]:::external
         end
-        OAI["Azure OpenAI<br/>GPT-4o · Structured Output<br/>deployment: gpt-4o"]:::external
+        OAI["Azure OpenAI<br/>classify + enrich"]:::external
     end
 
     %% ====== AZURE PLATFORM ======
     subgraph T4["AZURE PLATFORM"]
         direction TB
-        COSMOS[("Cosmos DB<br/>serverless · SQL API<br/>db=calorch · container=events<br/>partition key: /event_id")]:::store
-        PG[("PostgreSQL<br/>LangGraph checkpoints")]:::store
-        KV[("Key Vault<br/>graph-secret · cosmos-key<br/>openai-key · langsmith-key")]:::store
-        CR[("ACR Basic<br/>calorch.azurecr.io<br/>calorch:tag")]:::store
-        LA[("Log Analytics<br/>+ App Insights<br/>(Container Apps env)")]:::store
+        BLOB[("Storage · Blob<br/>calorch-inputs / calorch-outputs")]:::store
+        COSMOS[("Cosmos DB<br/>serverless · /event_id<br/>delivery idempotency")]:::store
+        KV[("Key Vault<br/>graph-secret · openai-key · cosmos-key")]:::store
+        LA[("App Insights<br/>+ Log Analytics")]:::store
     end
 
     %% ====== OBSERVABILITY ======
     subgraph T5["OBSERVABILITY"]
         direction TB
-        LS["LangSmith<br/>traces · evals · datasets"]:::obs
+        LS["LangSmith<br/>agent traces · evals"]:::obs
     end
 
     %% ====== EDGES ======
-    CRON -->|scales 0→1| INGRESS
-    HTTPC --> INGRESS
-    INGRESS -->|FastAPI| SERVE
+    TIMER --> ORC
+    HTTPC --> ORC
+    EXT -.->|raise_event| GATE
 
     N1 -->|HTTPS| M1
-    N1 -->|HTTPS| S1
-    N1 -->|HTTPS| S3
-    N3 -->|HTTPS + JSON-schema| OAI
-
-    W1 & W2 & WN -->|HTTPS| S2
+    N2 -->|HTTPS| OAI
+    W1 & W2 & WN -->|read pre-ingested| BLOB
+    W1 & W2 & WN -.->|fallback| S1
+    W1 & W2 & WN -.->|macro| S2
+    W1 & W2 & WN -->|enrich| OAI
+    W1 & W2 & WN -->|upload| M3
     DELIVER -->|HTTPS| M2
-    W1 & W2 & WN -->|HTTPS| M3
     DELIVER -->|SQL API| COSMOS
-    GATE -->|checkpoint| PG
+    N4 -->|write| BLOB
 
-    KV -.->|managed-identity| SERVE
-    CR -.->|AcrPull| T2A
-    T2A -->|stdout| LA
-
-    N1 & N2 & N3 & W1 & W2 & WN & N4 -.->|traces| LS
-    INT -.->|pauses| GATE
+    KV -.->|managed identity| T2A
+    T2A -->|stdout/metrics| LA
+    W1 & W2 & WN -.->|traces| LS
 ```
 
 ---
@@ -202,59 +205,55 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     autonumber
-    participant K as KEDA cron
-    participant A as ACA · calorch
-    participant G as Graph API
-    participant S as SEC EDGAR
-    participant O as Azure OpenAI
+    participant K as Timer trigger
+    participant O as calorch_orchestrator
+    participant SC as activity_scan_calendar
+    participant CL as activity_classify
+    participant AG as activity_agent (LangGraph)
+    participant B as Blob / SEC
+    participant AI as Azure OpenAI
     participant L as OneDrive
+    participant DV as activity_deliver
     participant M as Graph Mail
     participant C as Cosmos DB
-    participant P as PostgreSQL checkpoint
     participant H as Human reviewer
-    participant T as LangSmith
 
-    K->>A: scale 0→1 (Monday 06:00 UTC)
-    A->>S: GET /company_tickers.json
-    S-->>A: ticker↔CIK map
-    loop for each ticker in watchlist
-        A->>S: GET /submissions/CIK{cik}.json
-        S-->>A: filings[] (form, items, date, accession)
-    end
-    A->>S: GET /xbrl/companyfacts/CIK{cik}.json (per ticker)
-    S-->>A: revenue, net_income, eps
-    A->>A: Pass 1: classify_form(form, items)
-    Note over A: 8-K items=2.02 → earnings_call<br/>8-K items=5.07 → conference
-    alt confidence < 0.95
-        A->>O: structured classify
-        O-->>A: ClassificationResult
-    end
-    A->>T: log trace
-    par prepare per filing (parallel Send)
-        A->>S: GET XBRL (latest)
-        S-->>A: snapshot
-        A->>A: build_analysis(type, ev, ed)
-        A->>A: render DOCX (python-docx)
-        A->>L: PUT /drive/items/{id}:/calorch/{ev_id}.docx
-        L-->>A: webUrl
-        A->>A: render HTML email preview
+    K->>O: start_new (Monday 09:00 UTC)
+    Note over O: run_id = current_utc_datetime<br/>(deterministic)
+    O->>SC: call_activity_with_retry
+    SC-->>O: events[] + raw_events[]
+    O->>CL: call_activity_with_retry(events, raw_events)
+    CL->>AI: Pass 2 classify (if Pass 1 < 0.95)
+    AI-->>CL: ClassificationResult
+    CL-->>O: classifications{}
+    par task_all(activity_agent × N)
+        O->>AG: event + classification
+        AG->>B: read pre-ingested data (or SEC fallback)
+        AG->>AI: enrich sections (template prompts)
+        AG->>AG: build_analysis → render DOCX/HTML
+        AG->>L: upload DOCX
+        AG-->>O: documents, prepared_emails, links
     end
     alt send_emails = true and require_approval = true
-        A->>P: checkpoint prepared previews
-        A-->>H: pending_approval
-        H->>A: POST /runs/{id}/approval
+        O->>O: wait_for_external_event("approval") ⟂ create_timer(24h)
+        O-->>H: instance paused (scale to zero)
+        H->>O: POST /api/approval/{id} {approved:true}
+        Note over O: timer cancelled; proceed
     end
-    par deliver per filing (parallel Send)
-        A->>M: POST /me/messages (record stable draft id)
-        alt send_emails = true
-            A->>C: UPSERT status=prepared, draft id
-            A->>M: POST /messages/{id}/send
-        end
-        A->>C: UPSERT final delivery status
+    par task_all(activity_deliver × N)
+        O->>DV: event + preview + document
+        DV->>C: upsert prepared (stable draft id)
+        DV->>M: createDraft / sendMail
+        DV->>C: upsert final status
+        DV-->>O: emails, followups
     end
-    A->>A: aggregate_briefing
-    A-->>K: exit (scale 1→0)
+    O->>O: activity_aggregate_briefing → weekly.html → blob
+    O-->>K: orchestration Completed
 ```
+
+The orchestrator code is deterministic and replayed by the host on every
+event; only activities perform I/O. Delivery is idempotent per
+`run_id:event_id`, so an activity retry never double-sends.
 
 ---
 
@@ -268,15 +267,15 @@ flowchart LR
     subgraph RG["Resource Group: rg-calorch-prod"]
         direction TB
         ID["Managed Identity<br/>(system-assigned)"]:::role
-        subgraph VNET["Container Apps Environment"]
-            ACA["calorch<br/>(revision: latest)"]
-            ACAENV["env, ingress,<br/>Log Analytics link"]
+        subgraph APP["Function App (Flex Consumption)"]
+            FUNC["calorch<br/>10 functions"]
+            PLAN["Flex plan · scale 0→N<br/>functionTimeout 30m"]
         end
         subgraph SIDECAR["Side services"]
-            ACR["ACR Basic<br/>calorch.azurecr.io"]
+            STG["Storage account<br/>task hub + blob containers"]
             COSMOS["Cosmos DB<br/>serverless"]
-            PG["PostgreSQL<br/>LangGraph checkpoints"]
             KV["Key Vault"]
+            AI["App Insights + Log Analytics"]
             OAI["Azure OpenAI<br/>(separate RG)"]
         end
     end
@@ -286,56 +285,58 @@ flowchart LR
         OD["OneDrive"]
     end
 
-    subgraph SEC["SEC EDGAR"]
-        EDGAR["data.sec.gov"]
+    subgraph DATA["Free data"]
+        EDGAR["data.sec.gov · FRED · FOMC"]
     end
 
-    ID -.->|AcrPull| ACR
+    ID -.->|Storage Blob Data Contributor| STG
     ID -.->|Cosmos DB Data Contributor| COSMOS
     ID -.->|Cognitive Services User| OAI
-    ID -.->|Secret User| KV
-    ACA -->|HTTPS| GRAPH
-    ACA -->|HTTPS| OD
-    ACA -->|HTTPS| EDGAR
-    ACA -->|HTTPS| OAI
-    ACA -->|SQL API| COSMOS
-    ACA -->|checkpoint| PG
-    KV -.->|secrets| ACA
+    ID -.->|Key Vault Secrets User| KV
+    FUNC -->|AzureWebJobsStorage| STG
+    FUNC -->|HTTPS| GRAPH
+    FUNC -->|HTTPS| OD
+    FUNC -->|HTTPS| EDGAR
+    FUNC -->|HTTPS| OAI
+    FUNC -->|SQL API| COSMOS
+    FUNC -->|telemetry| AI
+    KV -.->|secret refs| FUNC
 ```
 
 ---
 
-## Request lifecycle (human review gate)
+## Orchestration lifecycle (human review gate)
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle: scale = 0
-    Idle --> Booting: cron OR /run
-    Booting --> PullingImage: AcrPull (managed identity)
-    PullingImage --> Starting: cold-start ~5-10s
-    Starting --> Scanning: scan_calendar
-    Scanning --> Classifying: Pass 1 (keywords/SEC)
-    Classifying --> Classifying: Pass 2 (GPT-4o SO)
-    Classifying --> FanOut: Send × N prepare branches
+    Idle --> Running: timer OR POST /api/run
+    Running --> Scanning: activity_scan_calendar
+    Scanning --> Classifying: activity_classify
+    Classifying --> AgentFanOut: task_all(activity_agent × N)
 
-    state FanOut <<choice>>
-    FanOut --> Enriching: prepare_event
-    Enriching --> RenderingDOCX: build_analysis
-    RenderingDOCX --> UploadingOneDrive
-    UploadingOneDrive --> PreviewingEmail
+    state AgentFanOut <<choice>>
+    AgentFanOut --> Preparing: each agent subgraph
+    Preparing --> Enriching: data → analysis
+    Enriching --> Rendering: DOCX + HTML
+    Rendering --> Gathered: results merged
 
-    state PreviewingEmail <<choice>>
-    PreviewingEmail --> DraftingEmail: draft mode (default)
-    PreviewingEmail --> HumanReview: send + require_approval
-    HumanReview --> Checkpointed: interrupt()<br/>(pause)
-    Checkpointed --> Resumed: POST /runs/{id}/approval
-    Resumed --> DraftingEmail
-    DraftingEmail --> SendingEmail: send requested
-    DraftingEmail --> PersistingRepo: draft mode
-    SendingEmail --> PersistingRepo: Cosmos upsert
-    PersistingRepo --> Aggregating
-    Aggregating --> BriefingWritten
-    BriefingWritten --> Idle: scale = 0
+    state Gathered <<choice>>
+    Gathered --> Drafting: draft mode (default)
+    Gathered --> AwaitingApproval: send + require_approval
+
+    AwaitingApproval --> Approved: external event {approved:true}
+    AwaitingApproval --> Rejected: external event {approved:false}
+    AwaitingApproval --> TimedOut: durable timer (24h)
+    Note right of AwaitingApproval: instance pauses<br/>scale = 0 · no cost
+
+    Approved --> Delivering: task_all(activity_deliver)
+    Drafting --> Delivering
+    Rejected --> Briefing
+    TimedOut --> Briefing
+    Delivering --> Briefing: Cosmos upsert (idempotent)
+    Briefing --> Completed: activity_aggregate_briefing
+    Completed --> Idle: scale = 0
 ```
 
 ---
@@ -344,39 +345,37 @@ stateDiagram-v2
 
 | Concern | Control |
 |---|---|
-| **Credential storage** | ACA secrets today; use Key Vault references before production rollout |
-| **Container pull** | Managed identity + AcrPull role, no admin password |
-| **Cosmos access** | Cosmos account key in ACA secret today; managed identity is the target hardening step |
-| **OpenAI access** | Azure OpenAI key in ACA secret today; managed identity is the target hardening step |
-| **Graph access** | App registration (client credentials), secret in ACA secret store |
-| **HTTP API access** | `X-Calorch-API-Key` required for `/run` and `/runs/*`; health probe remains public |
-| **Email draft vs send** | `send_emails=False` default — human approves per event |
-| **Interrupt gate** | `approval_gate` calls `interrupt()` after previews; `POST /runs/{id}/approval` resumes |
-| **SEC fair-use** | `_RateLimiter` (9 req/sec, thread-safe) + `.cache/sec/` disk cache |
-| **LLM tracing** | LangSmith environment configuration; add PII redaction before enabling on sensitive calendars |
-| **Network egress** | ACA outbound to Graph/EDGAR/OpenAI over HTTPS only; no VNet required at this tier |
-| **Image scanning** | Enable Microsoft Defender for container registries in the Azure subscription |
+| **Credential storage** | Key Vault references in app settings; no secrets in plain text |
+| **Blob access** | Managed identity + `Storage Blob Data Contributor` (`AZURE_STORAGE_ACCOUNT_URL`, no connection string) |
+| **Cosmos access** | Cosmos key as Key Vault reference; managed identity is the hardening target |
+| **OpenAI access** | Azure OpenAI key as Key Vault reference (or `Cognitive Services User` via identity) |
+| **Graph access** | App registration (client credentials); scope to the research mailbox via application access policy |
+| **HTTP API access** | Azure **function keys** (`?code=`) on `run`/`approval`/`status`; distribute the approval key only to approvers |
+| **Email draft vs send** | `send_emails=false` default; `require_approval` gates external send per run |
+| **Approval gate** | `wait_for_external_event("approval")` raced against `create_timer` (24h default, `approval_timeout_hours` override) |
+| **Idempotent delivery** | repository `delivery_key` check + activity retries ⇒ at-most-once send |
+| **SEC fair-use** | thread-safe rate limiter (≤10 req/sec) + on-disk cache |
+| **LLM tracing** | LangSmith (optional); enable PII redaction before sensitive calendars |
+| **Scratch storage** | `OUTPUT_DIR`/`SEC_CACHE_DIR`/`AUDIT_LOG_PATH` on `/tmp` (package mount is read-only) |
 
 ---
 
 ## Cost breakdown (monthly, typical weekly job)
 
-| Resource | Quantity | Unit | Monthly |
-|---|---|---|---|
-| ACR (Basic) | 1 | $5.00 | $5.00 |
-| Container Apps active time | ~20 min/wk | $0.000012/vCPU-sec | $0.30 |
-| Cosmos DB Serverless | 100 RUs, 50 MB | $0.25/GB | $0.05 |
-| Log Analytics | 1 GB ingested | $2.30/GB | $2.30 |
-| Key Vault | 10 secrets, 10k ops | $0.03/10k | $0.01 |
-| Azure OpenAI (Pass 2 only) | ~5k calls/wk | ~$0.01/call | $20.00 |
-| LangSmith Developer | 1 seat | $39 | $39.00 |
-| **Total** | | | **~$66.66/mo** |
+| Resource | Quantity | Monthly |
+|---|---|---|
+| Function App (Flex Consumption) | ~20 min active/wk | ~$0 idle + pennies/run |
+| Storage (task hub + artifacts) | history + blobs | <$1.00 |
+| Cosmos DB Serverless | ~100 RUs, 50 MB | $0.05 |
+| App Insights + Log Analytics | ~1 GB | ~$5.00 |
+| Key Vault | 10 secrets | $0.01 |
+| Azure OpenAI (Pass 2 + enrichment) | token-driven | ~$8–20 |
+| LangSmith (optional) | 1 seat | $0–39 |
+| **Total (no LangSmith seat)** | | **~$15–28/mo** |
 
-For a 4-week run (1,000 filings, all 8 types, 1 LLM call per filing):
-- Cold-start amortised: ~10s × 4 = 40s
-- Active time: ~5 min × 4 = 20 min
-- LLM calls: SEC path skips Pass 2 (confidence 0.95), so only Outlook events
-  invoke GPT-4o. With a 200-event Outlook calendar that's ~$8/mo.
+The SEC fast-path skips Pass 2 (confidence ≥ 0.95), so only Outlook-sourced
+events incur classification tokens. The approval pause is free — state
+waits in the task hub, not on a running instance.
 
 ---
 
@@ -384,65 +383,69 @@ For a 4-week run (1,000 filings, all 8 types, 1 LLM call per filing):
 
 | Failure | Detection | Recovery |
 |---|---|---|
-| EDGAR rate-limited | 429 response | `_RateLimiter` backs off automatically |
-| EDGAR down | connect error | Filing skipped, error logged, rest of pipeline continues |
-| OneDrive 401 | token expired | MSAL refresh-token flow, transparent to caller |
-| LLM timeout | OpenAI 30s default | Pass 1 hint used (confidence 0.4), error recorded |
-| Cosmos write conflict | 409 from server | SDK retries with new session token |
-| ACA cold-start | first weekly run | 5-10s added; LangGraph checkpointer restores from last checkpoint |
-| Graph send quota | 429 from Graph | Microsoft Graph throttling headers respected (Retry-After) |
-| Image pull failure | 401/403 from ACR | AcrPull role re-checked; image tag rolled back via ACA revision |
+| Activity transient error (Graph/SEC/LLM) | exception in activity | `RetryOptions(3 attempts)` re-runs the activity |
+| EDGAR rate-limited / down | 429 / connect error | rate limiter backs off; event degrades to "—", pipeline continues |
+| OneDrive 401 | token expired | MSAL refresh-token flow, transparent |
+| LLM timeout | provider default | Pass 1 hint used (confidence 0.4), error recorded |
+| Cosmos write conflict | 409 | SDK retries with new session token |
+| Worker crash mid-run | host detects | orchestration replays deterministically from task-hub history |
+| Approval never arrives | durable timer | run resolves as `timed_out`, skips delivery, still briefs |
+| Duplicate delivery on retry | repository `delivery_key` | recorded draft id replayed; no second send |
+| Graph send quota | 429 | `Retry-After` respected |
 
 ---
 
-## Comparison with original ADR (Option C, Functions)
+## Why Durable Functions (vs the original ACA prototype)
 
-| Aspect | ADR Option C (Functions) | This impl (ACA) | Azure Durable Functions |
-|---|---|---|---|
-| Runtime | Azure Functions (Consumption) | Container Apps (Consumption) | Azure Functions (Consumption) |
-| Cold start | per-function | per-revision (1x/week) | per-function |
-| Per-node timeout | 5 min default, 10 min max | unbounded | 5 min default, 10 min max |
-| Checkpointer | Durable Functions orchestration state | LangGraph `PostgresSaver` (`MemorySaver` only for local dev) | Built-in task hub (Azure Storage) |
-| State sharing | orchestrator output binding | `configurable["context"]` injection | Orchestrator local variables (deterministic only) |
-| Parallel fan-out | `task.all([...])` | `Send` API (one line) | `task_all([call_sub_orchestrator(...)])` |
-| Scale to zero | yes | yes | yes |
-| Cost (weekly 1k events) | Functions: ~$5; Premium EP1: ~$160 | ~$7 | ~$5–10 |
-| Code complexity | N×function.json + bindings | 1 Dockerfile, 1 ACA YAML | N×activity + 1 orchestrator + bindings |
-| Multi-day pauses | native (durable timers) | supported with `CHECKPOINT_POSTGRES_URI` | native (`WaitForExternalEvent` + durable timers) |
-| Best for calorch? | acceptable | **yes** | poor (determinism + 10-min cap) |
+The first implementation ran the LangGraph `StateGraph` inside a FastAPI
+app on Azure Container Apps. The current architecture keeps LangGraph for
+the per-event agent work but moves **orchestration** to Azure Durable
+Functions:
 
-The ADR's Functions architecture is preserved in spirit (per-node
-boundary, durable orchestration, scale-to-zero) but realised on a
-runtime that doesn't impose a 10-minute execution limit on the
-per-event pipeline — important when a single event triggers
-Graph + EDGAR + OpenAI + OneDrive + Outlook + Cosmos round trips.
+| Aspect | ACA prototype | **This impl (Durable Functions)** |
+|---|---|---|
+| Orchestration | LangGraph StateGraph in-process | Durable Functions orchestrator |
+| Checkpointer | `PostgresSaver` (extra DB) | Task hub on Azure Storage (no extra DB) |
+| Parallel fan-out | `Send` API | `task_all([call_activity(...)])` |
+| Approval gate | `interrupt()` + Postgres resume | `wait_for_external_event` ⟂ durable timer |
+| Per-execution timeout | unbounded (replica) | 30 min (Flex Consumption) per activity |
+| Scale to zero | yes (replica) | yes (per-execution) |
+| HTTP surface | FastAPI middleware stack | function-key-protected triggers |
+| Idle cost | ~$5/mo (ACR) | ~$0 (no registry, no idle replica) |
+| Multi-day pauses | Postgres-backed | native durable timers |
 
-For the full evaluation of why we chose LangGraph on ACA over Durable
-Functions, see `docs/evaluations/azure-durable-functions.md`.
+The agent logic (non-deterministic: LLM calls, HTTP) stays inside
+activities, exactly where Durable Functions wants side effects — the
+orchestrator itself is pure and replay-safe.
+
+The LangGraph `StateGraph` (`calorch.graph.make_graph`) is retained for
+`langgraph dev` and unit tests; it mirrors the same nodes and registry so
+behaviour is identical to the activity path.
 
 For the enterprise-grade data-source strategy (Refinitiv / FactSet / Tiingo
 / FRED / SEC), see `docs/evaluations/enterprise-data-sources.md`. For a
-per-field gap analysis (what SEC has, what needs supplementing), see
-`docs/evaluations/sec-edgar-coverage.md`.
+per-field gap analysis, see `docs/evaluations/sec-edgar-coverage.md`.
 
-## Data source layer (built today)
+## Data source layer
 
 The orchestrator is wired against a `ProviderBundle` of free, official
-sources plus stubs for fields that require a paid terminal:
+sources plus stubs for fields that require a paid terminal. In production
+agents read **pre-ingested** data from `calorch-inputs`
+(`USE_BLOB_PROVIDERS=true`); `calorch.data_ingestion` populates it on a
+separate schedule.
 
 | Provider | Real impl | Stub | Triggered by env var |
 |---|---|---|---|
 | Macro (VIX, 10Y, oil, …) | FRED + FOMC H.15 | `StubFredClient` + `StubFedH15Client` | `FRED_API_KEY`, `USE_FRED`, `USE_FED_H15` |
-| Segments (product) | `SecIxbrlClient` (real parser) | `StubIxbrlClient` (curated AAPL/MSFT/…) | `USE_IXBRL_SEGMENTS` |
-| Segments (geographic) | `SecIxbrlClient` (real parser) | `StubIxbrlClient` (curated AAPL) | `USE_IXBRL_SEGMENTS` |
-| Narrative (guidance) | `SecEftsClient` (real search) | `StubEftsClient` (curated AAPL/MSFT/NVDA) | `USE_SEC_EFTS` |
-| Price (52w, market cap) | (none — no free source) | `StubPriceProvider` | `TIINGO_API_KEY` (when issued) |
-| Consensus (EPS est, target) | (none — no free source) | `StubConsensusProvider` | `REFINITIV_CLIENT_ID` (when issued) |
+| Segments (product/geo) | `SecIxbrlClient` (real parser) | `StubIxbrlClient` | `USE_IXBRL_SEGMENTS` |
+| Narrative (guidance) | `SecEftsClient` (real search) | `StubEftsClient` | `USE_SEC_EFTS` |
+| Price (52w, market cap) | Tiingo | `StubPriceProvider` | `TIINGO_API_KEY` |
+| Consensus (EPS est, target) | Tiingo | `StubConsensusProvider` | `TIINGO_API_KEY` |
 
-The dispatcher in `src/calorch/providers.py:build_providers()` reads
-`Settings` and returns the right implementation. The renderer never knows
-which one is wired.
+The dispatcher in `src/calorch/providers.py` reads `Settings` and returns
+the right implementation. The renderer never knows which one is wired.
 
 ---
 
-**See also:** `deploy/README.md` · `IMPLEMENTATION_REVIEW.md` · `langgraph.json`
+**See also:** `deploy/azure-functions.md` (deployment) · `IMPLEMENTATION_REVIEW.md` · `function_app.py` · `langgraph.json`
+```
