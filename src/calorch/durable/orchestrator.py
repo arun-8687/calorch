@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 import azure.durable_functions as df
@@ -195,7 +195,7 @@ def calorch_orchestrator(context: df.DurableOrchestrationContext):
 @bp.durable_client_input(client_name="client")
 async def timer_start(timer: func.TimerRequest, client):
     """Scheduled entry point (default: Mondays 09:00 UTC, 7-day lookahead)."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     run_id = now.strftime("%Y%m%dT%H%M%SZ")
     instance_id = await client.start_new(
         "calorch_orchestrator",
@@ -223,7 +223,7 @@ async def http_start(req: func.HttpRequest, client):
     except ValueError:
         body = {}
 
-    run_id = body.get("run_id") or datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = body.get("run_id") or datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
     instance_id = await client.start_new(
         "calorch_orchestrator",
         instance_id=run_id,

@@ -8,8 +8,9 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import datetime, UTC
+from typing import Any
+from collections.abc import Callable
 
 from calorch.durable.state import (
     deserialize_state,
@@ -24,15 +25,15 @@ from calorch.state import CalendarEvent, ClassificationResult, EventType
 # ---------------------------------------------------------------------------
 class TestStateAdapter:
     def test_serialize_datetime(self):
-        dt = datetime(2026, 3, 2, 10, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 3, 2, 10, 0, 0, tzinfo=UTC)
         assert serialize_state(dt) == "2026-03-02T10:00:00+00:00"
 
     def test_serialize_calendar_event(self):
         ev = CalendarEvent(
             id="ev-001",
             subject="AAPL Q2 FY2026 Earnings Call",
-            start=datetime(2026, 3, 2, 10, 0, 0, tzinfo=timezone.utc),
-            end=datetime(2026, 3, 2, 11, 0, 0, tzinfo=timezone.utc),
+            start=datetime(2026, 3, 2, 10, 0, 0, tzinfo=UTC),
+            end=datetime(2026, 3, 2, 11, 0, 0, tzinfo=UTC),
         )
         result = serialize_state(ev)
         assert result["id"] == "ev-001"
@@ -43,8 +44,8 @@ class TestStateAdapter:
             "event": CalendarEvent(
                 id="ev-001",
                 subject="test",
-                start=datetime(2026, 3, 2, 10, 0, 0, tzinfo=timezone.utc),
-                end=datetime(2026, 3, 2, 11, 0, 0, tzinfo=timezone.utc),
+                start=datetime(2026, 3, 2, 10, 0, 0, tzinfo=UTC),
+                end=datetime(2026, 3, 2, 11, 0, 0, tzinfo=UTC),
             ),
             "count": 42,
         }
@@ -113,7 +114,7 @@ class FakeTask:
 class FakeContext:
     def __init__(self, input_data: dict[str, Any], now: datetime | None = None):
         self._input = input_data
-        self.current_utc_datetime = now or datetime(2026, 6, 8, 9, 0, 0, tzinfo=timezone.utc)
+        self.current_utc_datetime = now or datetime(2026, 6, 8, 9, 0, 0, tzinfo=UTC)
         self.activity_calls: list[FakeTask] = []
         self.timers: list[FakeTask] = []
 

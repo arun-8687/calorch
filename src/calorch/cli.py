@@ -8,10 +8,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 from calorch.config import get_settings
@@ -66,17 +65,17 @@ def build_context(*, send_emails: bool, output_dir: Path) -> Context:
 def cmd_run(args: argparse.Namespace) -> int:
     s = get_settings()
     output_dir = Path(args.out or s.output_dir)
-    ctx = build_context(send_emails=args.send, output_dir=output_dir)
+    build_context(send_emails=args.send, output_dir=output_dir)
 
-    start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
-    end = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
+    start = datetime.fromisoformat(args.start).replace(tzinfo=UTC)
+    end = datetime.fromisoformat(args.end).replace(tzinfo=UTC)
 
     graph = make_graph()
     initial: OrchestratorState = {
         "window_start": start,
         "window_end": end,
         "use_mocks": s.use_mocks,
-        "run_id": datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "run_id": datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ"),
         "send_emails": args.send,
         "require_approval": args.interrupt,
     }
@@ -91,20 +90,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Summary
     print("\n=== SUMMARY ===")
     print(f"events: {len(result.get('events', []))}")
-    print(f"classifications:")
+    print("classifications:")
     for ev_id, cls in result.get("classifications", {}).items():
         print(f"  · {ev_id[:8]}…  {cls.final_label.value:<22}  conf={cls.confidence:.2f}")
-    print(f"\ndocuments:")
-    for ev_id, d in result.get("documents", {}).items():
+    print("\ndocuments:")
+    for d in result.get("documents", {}).values():
         print(f"  · {d.path}  ({d.bytes} bytes, sha256={d.sha256[:12]}…)")
-    print(f"\nemails:")
-    for ev_id, em in result.get("emails", {}).items():
+    print("\nemails:")
+    for em in result.get("emails", {}).values():
         print(f"  · {em.status:<6}  to={em.to}  subj={em.subject!r}")
     if result.get("weekly_briefing"):
         wb = result["weekly_briefing"]
         print(f"\nweekly briefing: {wb.path}")
     if result.get("errors"):
-        print(f"\nerrors:")
+        print("\nerrors:")
         for e in result["errors"]:
             print(f"  ! {e}")
     return 0

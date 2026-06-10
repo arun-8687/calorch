@@ -16,14 +16,18 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+from collections.abc import Iterable
 from urllib.parse import quote
 
 import httpx
 
 from calorch.config import Settings
+
+if TYPE_CHECKING:
+    from calorch.providers import ProviderBundle
 from calorch.state import CalendarEvent, OrchestratorError
 
 
@@ -126,8 +130,8 @@ class _GraphClientReal:
     def list_events(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
         url = f"{self._GRAPH}/users/{self._s.graph_user_id}/calendar/calendarView"
         params = {
-            "startDateTime": start.astimezone(timezone.utc).isoformat(),
-            "endDateTime": end.astimezone(timezone.utc).isoformat(),
+            "startDateTime": start.astimezone(UTC).isoformat(),
+            "endDateTime": end.astimezone(UTC).isoformat(),
             "$select": "id,subject,bodyPreview,start,end,organizer,attendees,location,isOnlineMeeting,webLink",
             "$top": "100",
         }
@@ -242,7 +246,7 @@ class _GraphClientReal:
 class MockGraphClient:
     """In-memory stand-in for Microsoft Graph.
 
-    Reads `data/seed_events.json` (if present) and returns copies of the
+    Reads the packaged `calorch/data/seed_events.json` (if present) and returns copies of the
     fixture events, so the graph has something to chew on in demo mode.
     """
 
@@ -325,20 +329,18 @@ def _parse_dt(s: Any) -> datetime:
 
 
 def _load_default_fixtures() -> list[dict[str, Any]]:
-    # Walk up from src/calorch/tools.py to find the data/ directory in the
-    # project root, regardless of the current working directory.
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "data" / "seed_events.json"
-        if candidate.exists():
-            return json.loads(candidate.read_text(encoding="utf-8"))
+    # Seed events ship inside the package (pyproject package-data), so they
+    # resolve from both a source checkout and a pip install.
+    candidate = Path(__file__).resolve().parent / "data" / "seed_events.json"
+    if candidate.exists():
+        return json.loads(candidate.read_text(encoding="utf-8"))
     return []
 
 
 # ---------------------------------------------------------------------------
 # OneDrive
 # ---------------------------------------------------------------------------
-def make_onedrive_client(settings: Settings) -> "OneDriveClient":
+def make_onedrive_client(settings: Settings) -> OneDriveClient:
     if settings.use_mocks or not settings.onedrive_drive_id:
         return LocalOneDriveClient(settings.output_dir / "onedrive")
     _require_graph_settings(settings)
@@ -657,7 +659,7 @@ def _env_true(name: str, default: bool) -> bool:
 # Helpers
 # ---------------------------------------------------------------------------
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _require_graph_settings(settings: Settings) -> None:
@@ -725,7 +727,6 @@ __all__ = [
     "GraphClient",
     "MockGraphClient",
     "make_graph_client",
-    "make_sec_calendar_client",
     "make_cik_lookup",
     "OneDriveClient",
     "LocalOneDriveClient",
@@ -743,7 +744,7 @@ __all__ = [
 ]
 
 
-def make_cik_lookup(settings: "Settings"):
+def make_cik_lookup(settings: Settings):
     """Build a callable ``cik_for(ticker) -> str | None``.
 
     This is the smallest piece of SEC we need to do ticker → CIK
@@ -762,7 +763,7 @@ def make_cik_lookup(settings: "Settings"):
 # ---------------------------------------------------------------------------
 # Provider bundle — config-driven dispatch for data sources.
 # ---------------------------------------------------------------------------
-def make_providers(settings: Settings) -> "ProviderBundle":  # type: ignore[name-defined]
+def make_providers(settings: Settings) -> ProviderBundle:
     """Build the active provider bundle for this run.
 
     Resolution order per provider:

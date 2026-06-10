@@ -21,7 +21,8 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Generator
+from typing import Any
+from collections.abc import Generator
 
 import httpx
 from tenacity import (

@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 # Try to import the OTel API. If unavailable, fall back to a no-op tracer.
 try:

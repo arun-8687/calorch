@@ -82,7 +82,6 @@ class Settings:
     langsmith_api_key: str | None
     langsmith_project: str
     langsmith_tracing: bool
-    checkpoint_postgres_uri: str | None
 
     # Azure Blob Storage
     azure_storage_connection_string: str | None
@@ -133,7 +132,6 @@ def get_settings() -> Settings:
         langsmith_api_key=_env("LANGSMITH_API_KEY"),
         langsmith_project=_env("LANGSMITH_PROJECT", "calorch") or "calorch",
         langsmith_tracing=_bool("LANGSMITH_TRACING", False),
-        checkpoint_postgres_uri=_env("CHECKPOINT_POSTGRES_URI"),
         azure_storage_connection_string=_env("AZURE_STORAGE_CONNECTION_STRING"),
         azure_storage_account_url=_env("AZURE_STORAGE_ACCOUNT_URL"),
         blob_input_container=_env("BLOB_INPUT_CONTAINER", "calorch-inputs") or "calorch-inputs",

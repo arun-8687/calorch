@@ -18,9 +18,10 @@ stub/curated dataset).
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
+
+import httpx
 
 from calorch.telemetry import start_span
 
@@ -130,7 +131,6 @@ class LlmEnricher:
                 msgs = [SystemMessage(content=system), HumanMessage(content=user)]
                 resp = self._llm.invoke(msgs, max_tokens=max_tokens)
                 raw = resp.content if hasattr(resp, "content") else str(resp)
-                preview = raw[:200].replace("\n", "\\n")
                 log.info("LLM raw (%d chars, %d lines): %.200s", len(raw), raw.count("\n") + 1, raw[:200].replace("\n", "\\n"))
                 return raw
         except (httpx.HTTPError, ConnectionError, TimeoutError, ValueError, TypeError, AttributeError) as exc:

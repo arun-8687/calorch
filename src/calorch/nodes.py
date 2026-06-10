@@ -13,15 +13,13 @@ of runtime objects.
 """
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import re
-import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import httpx
 from langchain_core.runnables import RunnableConfig
@@ -88,7 +86,7 @@ def set_context(ctx: Context) -> None:
     _CTX = ctx
 
 
-def _ctx(config: RunnableConfig | None = None) -> Context:
+def _ctx(config: Optional[RunnableConfig] = None) -> Context:
     """Return the runtime Context.
 
     If a LangGraph ``RunnableConfig`` is passed and contains a
@@ -216,7 +214,7 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
     """
     c = _ctx(config)
     results: dict[str, ClassificationResult] = dict(state.get("classifications", {}))
-    with start_span("calorch.node.llm_classify", event_count=len(state["events"])) as span:
+    with start_span("calorch.node.llm_classify", event_count=len(state["events"])):
         for ev in state["events"]:
             prev = results.get(ev.id) or ClassificationResult(event_id=ev.id)
             # Trust the SEC form hint
@@ -278,7 +276,8 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
 
 def _parse_classification_json(text: str, event_id: str, prev: ClassificationResult) -> ClassificationResult:
     """Extract and validate a ClassificationResult from raw LLM text."""
-    import json, re
+    import json
+    import re
 
     # Try to extract the JSON object from the response
     # The model may wrap it in markdown fences or just output raw JSON
@@ -838,8 +837,8 @@ _TICKER_FALSE_POSITIVES = frozenset({
     "USA", "US", "EU", "UK", "APAC", "EMEA", "LATAM", "CHINA", "JAPAN",
     # Industries / concepts
     "AI", "ML", "DL", "LLM", "GPU", "CPU", "TPU", "API", "SaaS", "PaaS", "IaaS",
-    "ML", "RAG", "RL", "CV", "NLP", "AGI", "ASI",
-    "EV", "AV", "ADAS", "OEM", "SEMI", "PCB", "IC", "SOC", "IP", "ASSP",
+    "RAG", "RL", "CV", "NLP", "AGI", "ASI",
+    "EV", "AV", "ADAS", "OEM", "SEMI", "PCB", "SOC", "IP", "ASSP",
     "TMT", "HC", "FIG", "TECH", "FIN", "REIT",
     # Financial / regulatory
     "EPS", "EBIT", "EBITDA", "PEG", "NAV", "AUM", "IRR", "NPV", "DCF", "WACC",
@@ -966,4 +965,4 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
 # Helpers
 # ---------------------------------------------------------------------------
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)

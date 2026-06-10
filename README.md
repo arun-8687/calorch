@@ -123,7 +123,7 @@ exception, never a stub leaking into output.
 
 ## Template System
 
-All 8 event types are defined as JSON templates (`data/templates/`) modeled on real equity research prep packs. Zero hardcoded content in Python.
+All 8 event types are defined as JSON templates (`src/calorch/data/templates/`, shipped inside the package) modeled on real equity research prep packs. Zero hardcoded content in Python.
 
 ```json
 {
@@ -225,8 +225,8 @@ calorch_orchestrator                       (deterministic — no I/O, no wall cl
 
 `calorch.graph.make_graph` still assembles the equivalent pipeline as a
 LangGraph `StateGraph` (registry-driven agents, `Send` fan-out,
-`interrupt()` approval, `MemorySaver`/`PostgresSaver` checkpoints). It's
-used for `langgraph dev` and unit tests; the Durable Functions app is the
+`interrupt()` approval, in-memory checkpoints). It's used for
+`langgraph dev` and unit tests; the Durable Functions app is the
 deployment target.
 
 ---
@@ -251,10 +251,10 @@ calorch/
 ├── pyproject.toml
 ├── langgraph.json                    # `langgraph dev` entry (graph.make_graph)
 ├── .env.example
-├── data/
-│   ├── seed_events.json              # demo events (USE_MOCKS=true)
-│   └── templates/                    # 8 JSON report templates
 ├── src/calorch/
+│   ├── data/                         # packaged data (ships in the wheel)
+│   │   ├── seed_events.json          #   demo events (USE_MOCKS=true)
+│   │   └── templates/                #   8 JSON report templates
 │   ├── durable/                      # Azure Durable Functions orchestration (deployment)
 │   │   ├── orchestrator.py           #   orchestrator + timer/HTTP triggers + approval gate
 │   │   ├── activities.py             #   5 activities wrapping nodes/agents

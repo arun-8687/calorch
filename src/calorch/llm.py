@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
@@ -66,8 +67,6 @@ class MockChatModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
 
     def with_structured_output(self, schema: type[BaseModel] | dict, **_: Any):
-        outer = self
-
         class _StructuredRunnable:
             def invoke(self, input_: Any, **kw: Any) -> BaseModel | dict:
                 msgs = _flatten_input(input_)

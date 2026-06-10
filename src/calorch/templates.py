@@ -1,6 +1,6 @@
 """Template engine — loads JSON templates and drives report generation.
 
-All eight report types are defined as JSON templates in data/templates/.
+All eight report types are defined as JSON templates in calorch/data/templates/.
 This module resolves template variables, dispatches LLM calls, and
 returns a structured EventAnalysis that the docx renderer can walk.
 
@@ -25,9 +25,10 @@ from calorch.state import EventType
 
 log = logging.getLogger("calorch.templates")
 
-# Resolve template directory from project root (not src/)
-# __file__ is in src/calorch/, so go up two levels to project root
-_TPL_DIR = Path(__file__).parent.parent.parent / "data" / "templates"
+# Templates ship inside the package (declared in pyproject package-data)
+# so they resolve identically from a source checkout and a pip install
+# (e.g. Azure Functions remote build into .python_packages).
+_TPL_DIR = Path(__file__).parent / "data" / "templates"
 
 
 def load_template(event_type: str | EventType | Path) -> dict[str, Any]:
@@ -106,7 +107,6 @@ class TemplateEngine:
         data_tables: dict[str, Any],
     ) -> None:
         source = sec.get("source", "static")
-        sec_id = sec.get("id", "")
 
         if source == "llm":
             self._build_llm_section(sec, a, ctx)

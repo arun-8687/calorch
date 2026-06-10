@@ -8,7 +8,6 @@ from __future__ import annotations
 import pytest
 
 from calorch.telemetry import (
-    get_current_span_id,
     get_current_trace_id,
     init_tracing,
     instrument_httpx,

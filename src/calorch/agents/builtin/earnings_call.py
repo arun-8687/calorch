@@ -6,7 +6,7 @@ brief with XBRL financials, consensus, segments and guidance).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 
 from calorch.agents.base import AgentSpec, register
@@ -99,7 +99,7 @@ def build_earnings_call(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
         "quarter": ed.get("quarter", "Q2 FY2026"),
         "event_date": ev.start.dateTime[:10] if hasattr(ev.start, "dateTime") else str(ev.start),
         "event_time": "8:00 PM IST",
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
         "confidence": cls.confidence,
         "tickers": a_base.tickers,
         "last_quarter_label": "Q1 FY2026",

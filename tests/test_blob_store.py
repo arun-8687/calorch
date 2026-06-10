@@ -1,10 +1,7 @@
 """Tests for calorch.blob_store — Local, Null, and path helpers."""
 import json
-import tempfile
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 from calorch.blob_store import (
     AzureBlobStore,

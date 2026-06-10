@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from calorch.config import Settings, get_settings
+from calorch.config import Settings
 from calorch.providers import (
-    FreeMacroProvider,
     IxbrlSegmentProvider,
     ProviderBundle,
     TiingoConsensusProvider,
@@ -55,7 +54,6 @@ def base_settings() -> Settings:
         langsmith_api_key=None,
         langsmith_project="calorch",
         langsmith_tracing=False,
-        checkpoint_postgres_uri=None,
         azure_storage_connection_string=None,
         azure_storage_account_url=None,
         blob_input_container="calorch-inputs",

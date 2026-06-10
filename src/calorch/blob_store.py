@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -112,7 +112,7 @@ class AzureBlobStore:
         output_container: str = "calorch-outputs",
     ) -> None:
         try:
-            from azure.storage.blob import ContainerClient
+            from azure.storage.blob import ContainerClient  # noqa: F401  (availability probe)
             from azure.identity import DefaultAzureCredential
         except ImportError as exc:
             raise ImportError(
@@ -196,7 +196,7 @@ class AzureBlobStore:
         overwrite: bool = True,
     ) -> str:
         data = json.dumps(obj, indent=2, default=str, ensure_ascii=False).encode("utf-8")
-        md = {"uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT)}
+        md = {"uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT)}
         if metadata:
             md.update(metadata)
         return self.upload_bytes(
@@ -222,7 +222,7 @@ class AzureBlobStore:
         ):
             data = local_path.read_bytes()
             md = {
-                "uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT),
+                "uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT),
                 "original_filename": local_path.name,
             }
             if metadata:
@@ -312,7 +312,7 @@ class LocalBlobStore:
         metadata: dict[str, str] | None = None,
         overwrite: bool = True,
     ) -> str:
-        md = {"uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT)}
+        md = {"uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT)}
         if metadata:
             md.update(metadata)
         data = json.dumps(obj, indent=2, default=str, ensure_ascii=False).encode("utf-8")
@@ -333,7 +333,7 @@ class LocalBlobStore:
             return p.as_uri()
         shutil.copy2(local_path, p)
         md = {
-            "uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT),
+            "uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT),
             "original_filename": local_path.name,
         }
         if metadata:

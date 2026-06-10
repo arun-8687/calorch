@@ -15,13 +15,11 @@ from __future__ import annotations
 
 import csv
 import io
-import time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
 
 from calorch.http_client import get_client
 

@@ -116,7 +116,7 @@ class FreeMacroProvider:
                         }
             except (httpx.HTTPError, ConnectionError, TimeoutError, RuntimeError, ValueError, KeyError, AttributeError) as e:
                 log.warning("FOMC H.15 snapshot failed: %s", e)
-        for k, v in snap.items():
+        for v in snap.values():
             if "source" not in v:
                 v["source"] = "fred"
         return snap

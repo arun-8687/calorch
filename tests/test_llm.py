@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from calorch.config import Settings
 from calorch.llm import MockChatModel, get_chat_model
@@ -48,7 +47,6 @@ def _settings(**kw) -> Settings:
         "langsmith_api_key": None,
         "langsmith_project": "calorch",
         "langsmith_tracing": False,
-        "checkpoint_postgres_uri": None,
         "azure_storage_connection_string": None,
         "azure_storage_account_url": None,
         "blob_input_container": "calorch-inputs",

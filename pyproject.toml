@@ -10,8 +10,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "langgraph>=1.0,<2.0",
-  "langgraph-checkpoint-postgres>=3.0,<4.0",
-  "psycopg[binary]>=3.2,<4.0",
   "langchain-core>=1.0,<2.0",
   "langchain-openai>=0.2",
   "openai>=1.40",
@@ -58,4 +56,26 @@ calorch = "calorch.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-calorch = ["templates/*.html", "templates/*.j2"]
+calorch = ["data/templates/*.json", "data/seed_events.json"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E4/E7/E9: pycodestyle errors · F: pyflakes (undefined names, unused
+# imports/vars) · B: bugbear (likely bugs) · UP: modernise to py311 idioms
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = [
+  "B008",  # function call in default argument (used deliberately for factories)
+  "UP015", # open() mode "r" is fine explicit
+  "UP042", # EventType(str, Enum) is deliberate: StrEnum changes str()/format
+           # semantics and the Pydantic JSON contract
+  "UP045", # keep Optional[RunnableConfig] in node signatures — LangGraph's
+           # signature inspector warns on the PEP 604 string form
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]   # assert False with message is fine in tests
+"scripts/*" = ["B007"]  # exploratory probe scripts

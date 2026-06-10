@@ -14,6 +14,7 @@ from calorch.agents import (
     unregister,
 )
 from calorch.state import EventType
+from datetime import UTC
 
 
 class TestBuiltinRegistration:
@@ -134,15 +135,15 @@ class TestDispatchIntegration:
                 ),
                 replace=True,
             )
-            from datetime import datetime, timezone
+            from datetime import datetime
 
             from calorch.state import CalendarEvent, ClassificationResult
 
             ev = CalendarEvent(
                 id="ev-ir",
                 subject="Sprint retro",
-                start=datetime(2026, 6, 10, tzinfo=timezone.utc),
-                end=datetime(2026, 6, 10, 1, tzinfo=timezone.utc),
+                start=datetime(2026, 6, 10, tzinfo=UTC),
+                end=datetime(2026, 6, 10, 1, tzinfo=UTC),
             )
             cls = ClassificationResult(event_id="ev-ir", final_label=EventType.INTERNAL_REVIEW)
             build_analysis(EventType.INTERNAL_REVIEW, ev, cls, {"snapshots": {}}, None)
@@ -152,15 +153,15 @@ class TestDispatchIntegration:
 
     def test_fan_out_uses_registry_node_names(self):
         from calorch.nodes import fan_out_prepare_events
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from calorch.state import CalendarEvent, ClassificationResult
 
         ev = CalendarEvent(
             id="ev-1",
             subject="AAPL Earnings",
-            start=datetime(2026, 6, 10, tzinfo=timezone.utc),
-            end=datetime(2026, 6, 10, 1, tzinfo=timezone.utc),
+            start=datetime(2026, 6, 10, tzinfo=UTC),
+            end=datetime(2026, 6, 10, 1, tzinfo=UTC),
         )
         cls = ClassificationResult(event_id="ev-1", final_label=EventType.EARNINGS_CALL)
         sends = fan_out_prepare_events({"events": [ev], "classifications": {"ev-1": cls}})

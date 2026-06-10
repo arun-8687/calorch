@@ -1,8 +1,5 @@
 """Tests for the StateGraph assembly and full happy path."""
-import json
-import shutil
-import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import pytest
@@ -66,8 +63,8 @@ def test_graph_compiles():
 def test_end_to_end_runs_all_eight(ctx):
     g = make_graph()
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "test-run",
     }
@@ -94,8 +91,8 @@ def test_send_run_pauses_after_previews_then_resumes(ctx):
     g = make_graph()
     cfg = {"configurable": {"thread_id": "approval-test"}}
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "approval-test",
         "send_emails": True,
@@ -120,8 +117,8 @@ def test_rejected_send_run_never_delivers(ctx):
     g = make_graph()
     cfg = {"configurable": {"thread_id": "rejected-test"}}
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "rejected-test",
         "send_emails": True,
@@ -140,8 +137,8 @@ def test_rejected_send_run_never_delivers(ctx):
 def test_delivery_replay_is_idempotent(ctx):
     g = make_graph()
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "idempotency-test",
         "send_emails": False,
@@ -170,8 +167,8 @@ def test_empty_calendar_still_writes_briefing(ctx):
     ctx.graph = MockGraphClient(fixtures=[])
     g = make_graph()
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "empty-test",
     }

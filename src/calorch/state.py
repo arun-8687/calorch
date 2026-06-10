@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -99,9 +99,9 @@ class EmailArtifact(BaseModel):
     to: list[str]
     subject: str
     html_path: str
-    attachment_path: Optional[str] = None
+    attachment_path: str | None = None
     status: Literal["draft", "sent", "failed"] = "draft"
-    graph_message_id: Optional[str] = None
+    graph_message_id: str | None = None
 
 
 class PreparedEmailArtifact(BaseModel):
@@ -112,8 +112,8 @@ class PreparedEmailArtifact(BaseModel):
     subject: str
     html_path: str
     html: str
-    attachment_path: Optional[str] = None
-    document_url: Optional[str] = None
+    attachment_path: str | None = None
+    document_url: str | None = None
     blob_url: str = ""
 
 
@@ -121,7 +121,7 @@ class FollowUpItem(BaseModel):
     event_id: str
     action: str
     owner: str
-    due: Optional[datetime] = None
+    due: datetime | None = None
     notes: str = ""
 
 
@@ -192,7 +192,7 @@ class OrchestratorState(TypedDict, total=False):
 
     # ---- aggregations ----
     followups: Annotated[list[FollowUpItem], _append_unique_followups]
-    weekly_briefing: Optional[WeeklyBriefing]
+    weekly_briefing: WeeklyBriefing | None
 
     # ---- observability ----
     errors: Annotated[list[str], _append]

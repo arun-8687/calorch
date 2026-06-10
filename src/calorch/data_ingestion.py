@@ -20,7 +20,7 @@ Usage (Azure Durable Functions activity):
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +33,7 @@ _INPUT_CONTAINER = "calorch-inputs"
 
 
 def _today() -> str:
-    return datetime.now(tz=timezone.utc).strftime("%Y%m%d")
+    return datetime.now(tz=UTC).strftime("%Y%m%d")
 
 
 def _blob_path(provider: str, ticker: str = "", cik: str = "", date: str = "", suffix: str = ".json") -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 import types
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -114,8 +114,8 @@ def test_graph_calendar_view_follows_pagination(settings: Settings):
     client._token_expires = float("inf")
     client._http = Http()
     events = client.list_events(
-        start=datetime(2026, 6, 1, tzinfo=timezone.utc),
-        end=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        start=datetime(2026, 6, 1, tzinfo=UTC),
+        end=datetime(2026, 6, 2, tzinfo=UTC),
     )
     assert [event["id"] for event in events] == ["a", "b"]
     assert client._http.calls[1] == ("GET", "https://next", None)

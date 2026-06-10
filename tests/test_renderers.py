@@ -1,5 +1,5 @@
 """Tests for the DOCX and HTML renderers."""
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import pytest
@@ -15,8 +15,8 @@ def sample_event() -> CalendarEvent:
         id="ev-test-001",
         subject="AAPL Q1 FY26 Earnings Call",
         body_preview="Apple Q1 results discussion",
-        start=datetime(2026, 3, 3, 21, 0, tzinfo=timezone.utc),
-        end=datetime(2026, 3, 3, 22, 0, tzinfo=timezone.utc),
+        start=datetime(2026, 3, 3, 21, 0, tzinfo=UTC),
+        end=datetime(2026, 3, 3, 22, 0, tzinfo=UTC),
         organizer="ir@apple.com",
         attendees=["me@firm.example"],
         location="Webcast",

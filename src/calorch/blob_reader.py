@@ -15,18 +15,12 @@ Path conventions:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 
-from calorch.blob_store import BlobStore, make_blob_store
+from calorch.blob_store import BlobStore
 from calorch.providers import (
-    ConsensusProvider,
-    FundamentalsProvider,
-    MacroProvider,
-    NarrativeProvider,
-    PriceProvider,
     ProviderBundle,
-    SegmentProvider,
 )
 
 log = logging.getLogger("calorch.blob_reader")
@@ -35,7 +29,7 @@ _INPUT_CONTAINER = "calorch-inputs"
 
 
 def _today() -> str:
-    return datetime.now(tz=timezone.utc).strftime("%Y%m%d")
+    return datetime.now(tz=UTC).strftime("%Y%m%d")
 
 
 def _blob_path(provider: str, ticker: str = "", cik: str = "", date: str = "") -> str:

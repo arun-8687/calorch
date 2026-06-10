@@ -1,7 +1,6 @@
 """Tests for structured JSON logging, PII redaction, and request ID correlation."""
 from __future__ import annotations
 
-import io
 import json
 import logging
 import re

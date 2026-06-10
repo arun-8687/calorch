@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Optional
+from collections.abc import Callable, Iterator
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
@@ -59,7 +60,7 @@ class AgentSpec:
     analysis_builder: Callable[..., Any]
     keywords: tuple[str, ...] = ()
     node_name: str = ""
-    graph_factory: Optional[Callable[["AgentSpec"], Any]] = None
+    graph_factory: Callable[[AgentSpec], Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.node_name:

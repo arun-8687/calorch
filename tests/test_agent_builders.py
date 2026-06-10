@@ -10,7 +10,7 @@ in the same commit — that's the signal that behaviour moved on purpose.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 
@@ -163,8 +163,8 @@ def _run(event_type: EventType, subject: str):
     ev = CalendarEvent(
         id=f"ev-{event_type.value}",
         subject=subject,
-        start=datetime(2026, 6, 10, 10, tzinfo=timezone.utc),
-        end=datetime(2026, 6, 10, 11, tzinfo=timezone.utc),
+        start=datetime(2026, 6, 10, 10, tzinfo=UTC),
+        end=datetime(2026, 6, 10, 11, tzinfo=UTC),
         body_preview="preview text",
     )
     cls = ClassificationResult(event_id=ev.id, final_label=event_type, confidence=0.8)
