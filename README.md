@@ -279,16 +279,13 @@ calorch/
 │   ├── tools.py                      # GraphClient, OneDrive, Repository, make_providers
 │   ├── sec.py / sec_ixbrl.py / sec_efts.py  # SEC EDGAR clients
 │   ├── fred.py / fed_h15.py / tiingo.py     # Macro + price clients
-│   ├── serve.py                      # FastAPI dev server (local/standalone — not the Azure path)
-│   └── cli.py                        # `calorch run / summary / serve`
-├── tests/                            # 201 tests (test_durable, test_agents, test_graph, …)
+│   └── cli.py                        # `calorch run / summary / serve` (serve = langgraph dev)
+├── tests/                            # tests (test_durable, test_agents, test_graph, …)
 ├── docs/
 │   ├── architecture.md / .html       # Durable Functions architecture
 │   └── evaluations/                  # ADR, data-source, implementation reviews
 ├── deploy/
-│   ├── azure-functions.md            # ► Azure deployment guide (current)
-│   ├── README.md                     # legacy Container Apps path
-│   ├── containerapp.yaml / deploy.ps1 # legacy ACA assets
+│   └── azure-functions.md            # ► Azure Durable Functions deployment guide
 └── scripts/                          # run_demo, run_sec, render_architecture
 ```
 
@@ -353,7 +350,6 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `USE_MOCKS` | No | `true` = MockChatModel + seed events (default `true`) |
 | `CALORCH_AGENT_MODULES` | No | Comma-separated import paths of out-of-tree agent modules |
 | `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` / `LANGSMITH_TRACING` | No | LangSmith tracing of agent subgraphs |
-| `CALORCH_API_KEY` | No | Auth for the FastAPI dev server (`serve.py`) — the Azure HTTP triggers use function keys instead |
 
 ---
 
@@ -458,11 +454,10 @@ approve, reject, and timeout paths — no Azure runtime required.
 
 ## Enterprise Hardening
 
-### Runtime-agnostic (applies to the Durable Functions app)
+### Application-level
 - **Structured JSON logging** (`calorch.logging_config`) — one JSON object per line, ready for App Insights / Log Analytics ingest. Set `LOG_FORMAT=json`.
-- **Request/run ID propagation** through `contextvars` — every log line, audit entry, and span carries the same correlation ID.
+- **Request/run ID propagation** through `contextvars` — every log line and span carries the same correlation ID.
 - **PII redaction** in the log formatter — emails, SSN, phone numbers, bearer tokens, and API keys are redacted before emission.
-- **Append-only audit log** (`calorch.audit`) — run lifecycle, approval decisions, and timeouts written as JSONL to `AUDIT_LOG_PATH`, with `request_id`/`run_id`/actor/timestamp and no PII body.
 - **OpenTelemetry traces** (`calorch.telemetry`) — spans on every node, agent subgraph, LLM call, and HTTP request. `pip install calorch[otel]`; set `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - **Shared HTTP client** (`calorch.http_client`) — connection pooling, exponential-backoff retry (tenacity), circuit breaker. All external data sources use it.
 - **Idempotent delivery** — `deliver_event` checks the repository for an existing `delivery_key` before sending; combined with activity retries this guarantees at-most-once email send.
@@ -470,26 +465,16 @@ approve, reject, and timeout paths — no Azure runtime required.
 
 ### Handled by the Azure platform (Durable Functions)
 - **HTTP auth** — the `run`/`approval`/`status` triggers use Azure **function keys** (`?code=`); distribute the approval key only to approvers. Rotate via `az functionapp keys set`.
-- **Scaling & timeouts** — the Functions host scales 0→N and enforces `functionTimeout` (30 min); a hung activity is killed by the host, not a custom thread deadline.
+- **Scaling & timeouts** — the Functions host scales 0→N and enforces `functionTimeout` (30 min); a hung activity is killed by the host.
 - **Retries** — `RetryOptions(3 attempts)` on every activity; transient Graph/SEC/LLM failures are retried automatically.
 - **Secrets** — Key Vault references in app settings; managed identity for blob/Cosmos.
 - **Observability** — Application Insights wired at app creation; durable instance state queryable via `func durable` and `GET /api/status/{id}`.
-
-### Local FastAPI dev server (`serve.py`)
-The standalone FastAPI server is retained for local development and exposes
-its own middleware stack — `X-Calorch-API-Key` guard, per-caller rate
-limiting (429 + `Retry-After`), request-size limit (413), CORS, security
-headers, `/health`, `/ready`, `/metrics`, and a graph-invoke timeout. It is
-**not** the Azure deployment path; in the Functions app these concerns are
-covered by the platform controls above.
 
 | Var | Default | Purpose |
 |---|---|---|
 | `LOG_FORMAT` | `text` | `json` for log aggregation |
 | `LOG_LEVEL` | `INFO` | Root log level |
-| `AUDIT_LOG_PATH` | `./out/audit.jsonl` | Compliance evidence file (use `/tmp/...` on Azure) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP collector URL (optional) |
-| `RATE_LIMIT_PER_MINUTE` / `MAX_REQUEST_BYTES` / `RUN_TIMEOUT_SECONDS` / `CORS_ALLOWED_ORIGINS` | — | FastAPI dev-server middleware only |
 
 ---
 

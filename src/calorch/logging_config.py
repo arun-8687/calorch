@@ -1,8 +1,8 @@
 """Structured JSON logging with request ID correlation and PII redaction.
 
 Production logging for calorch. Emits one JSON object per log line to stdout,
-so Azure Container Apps log streaming / Log Analytics / Datadog can ingest
-records without a custom parser.
+so Application Insights / Log Analytics / Datadog can ingest records without a
+custom parser.
 
 Features:
   * JSON formatter (timestamp, level, logger, message, request_id, run_id,
@@ -234,7 +234,7 @@ def configure_logging(
         handler.setFormatter(TextFormatter())
 
     root = logging.getLogger()
-    # Remove any existing handlers (e.g. uvicorn's default)
+    # Remove any existing handlers (e.g. the Functions host's default)
     for h in list(root.handlers):
         root.removeHandler(h)
     root.addHandler(handler)

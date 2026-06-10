@@ -83,14 +83,7 @@ class Settings:
     langsmith_project: str
     langsmith_tracing: bool
     checkpoint_postgres_uri: str | None
-    calorch_api_key: str | None
 
-    # Operational guards
-    run_timeout_seconds: float
-    max_concurrent_runs: int
-    max_request_bytes: int
-    cors_allowed_origins: list[str]
-    rate_limit_per_minute: int
     # Azure Blob Storage
     azure_storage_connection_string: str | None
     azure_storage_account_url: str | None
@@ -98,8 +91,6 @@ class Settings:
     blob_output_container: str
     blob_local_root: Path | None  # LocalBlobStore root when Azure not configured
     use_blob_providers: bool  # Read from blob instead of live API
-
-    audit_log_path: Path
 
 
 @lru_cache(maxsize=1)
@@ -143,13 +134,6 @@ def get_settings() -> Settings:
         langsmith_project=_env("LANGSMITH_PROJECT", "calorch") or "calorch",
         langsmith_tracing=_bool("LANGSMITH_TRACING", False),
         checkpoint_postgres_uri=_env("CHECKPOINT_POSTGRES_URI"),
-        calorch_api_key=_env("CALORCH_API_KEY"),
-        run_timeout_seconds=float(_env("RUN_TIMEOUT_SECONDS", "300") or "300"),
-        max_concurrent_runs=int(_env("MAX_CONCURRENT_RUNS", "3") or "3"),
-        max_request_bytes=int(_env("MAX_REQUEST_BYTES", "1048576") or "1048576"),
-        cors_allowed_origins=_csv("CORS_ALLOWED_ORIGINS", ""),
-        rate_limit_per_minute=int(_env("RATE_LIMIT_PER_MINUTE", "30") or "30"),
-        audit_log_path=Path(_env("AUDIT_LOG_PATH", "./out/audit.jsonl") or "./out/audit.jsonl"),
         azure_storage_connection_string=_env("AZURE_STORAGE_CONNECTION_STRING"),
         azure_storage_account_url=_env("AZURE_STORAGE_ACCOUNT_URL"),
         blob_input_container=_env("BLOB_INPUT_CONTAINER", "calorch-inputs") or "calorch-inputs",

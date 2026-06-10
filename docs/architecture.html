@@ -203,7 +203,7 @@
 <li><a href="#security-amp-governance">Security &amp; governance</a></li>
 <li><a href="#cost-breakdown-monthly-typical-weekly-job">Cost breakdown (monthly, typical weekly job)</a></li>
 <li><a href="#failure-modes-amp-recovery">Failure modes &amp; recovery</a></li>
-<li><a href="#why-durable-functions-vs-the-original-aca-prototype">Why Durable Functions (vs the original ACA prototype)</a></li>
+<li><a href="#why-durable-functions">Why Durable Functions</a></li>
 <li><a href="#data-source-layer">Data source layer</a></li>
 </ul>
 </aside><h1>calorch — Solution Architecture (Azure Durable Functions)</h1>
@@ -407,73 +407,59 @@ waits in the task hub, not on a running instance.</p>
 </tbody>
 </table>
 <hr />
-<h2 id="why-durable-functions-vs-the-original-aca-prototype">Why Durable Functions (vs the original ACA prototype)</h2>
-<p>The first implementation ran the LangGraph <code>StateGraph</code> inside a FastAPI
-app on Azure Container Apps. The current architecture keeps LangGraph for
-the per-event agent work but moves <strong>orchestration</strong> to Azure Durable
-Functions:</p>
+<h2 id="why-durable-functions">Why Durable Functions</h2>
+<p>Orchestration runs on Azure Durable Functions; the per-event agent work
+runs as LangGraph subgraphs inside activities. The split lines up with
+each tool's strengths:</p>
 <table>
 <thead>
 <tr>
-<th>Aspect</th>
-<th>ACA prototype</th>
-<th><strong>This impl (Durable Functions)</strong></th>
+<th>Concern</th>
+<th>How Durable Functions handles it</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>Orchestration</td>
-<td>LangGraph StateGraph in-process</td>
-<td>Durable Functions orchestrator</td>
+<td>Deterministic orchestrator function (replayed on every event)</td>
 </tr>
 <tr>
-<td>Checkpointer</td>
-<td><code>PostgresSaver</code> (extra DB)</td>
-<td>Task hub on Azure Storage (no extra DB)</td>
+<td>Checkpointing</td>
+<td>Task hub on Azure Storage — no extra database to run</td>
 </tr>
 <tr>
-<td>Parallel fan-out</td>
-<td><code>Send</code> API</td>
-<td><code>task_all([call_activity(...)])</code></td>
+<td>Parallel fan-out / fan-in</td>
+<td><code>task_all([call_activity_with_retry(...)])</code></td>
 </tr>
 <tr>
 <td>Approval gate</td>
-<td><code>interrupt()</code> + Postgres resume</td>
-<td><code>wait_for_external_event</code> ⟂ durable timer</td>
+<td><code>wait_for_external_event</code> raced against a durable timer (multi-day pauses are native)</td>
 </tr>
 <tr>
 <td>Per-execution timeout</td>
-<td>unbounded (replica)</td>
-<td>30 min (Flex Consumption) per activity</td>
+<td>30 min per activity (Flex Consumption)</td>
 </tr>
 <tr>
 <td>Scale to zero</td>
-<td>yes (replica)</td>
-<td>yes (per-execution)</td>
+<td>per-execution billing; the approval pause costs nothing</td>
 </tr>
 <tr>
 <td>HTTP surface</td>
-<td>FastAPI middleware stack</td>
-<td>function-key-protected triggers</td>
+<td>function-key-protected triggers (<code>run</code> / <code>approval</code> / <code>status</code>)</td>
 </tr>
 <tr>
-<td>Idle cost</td>
-<td>~$5/mo (ACR)</td>
-<td>~$0 (no registry, no idle replica)</td>
-</tr>
-<tr>
-<td>Multi-day pauses</td>
-<td>Postgres-backed</td>
-<td>native durable timers</td>
+<td>Retries</td>
+<td><code>RetryOptions(3 attempts)</code> per activity</td>
 </tr>
 </tbody>
 </table>
-<p>The agent logic (non-deterministic: LLM calls, HTTP) stays inside
-activities, exactly where Durable Functions wants side effects — the
-orchestrator itself is pure and replay-safe.</p>
-<p>The LangGraph <code>StateGraph</code> (<code>calorch.graph.make_graph</code>) is retained for
-<code>langgraph dev</code> and unit tests; it mirrors the same nodes and registry so
-behaviour is identical to the activity path.</p>
+<p>The agent logic is non-deterministic (LLM calls, HTTP), so it lives inside
+activities — exactly where Durable Functions wants side effects — while the
+orchestrator itself stays pure and replay-safe.</p>
+<p>The same pipeline is also assembled as a LangGraph <code>StateGraph</code>
+(<code>calorch.graph.make_graph</code>) for <code>langgraph dev</code> and unit tests; it mirrors
+the same nodes and agent registry, so behaviour is identical to the
+activity path.</p>
 <p>For the enterprise-grade data-source strategy (Refinitiv / FactSet / Tiingo
 / FRED / SEC), see <code>docs/evaluations/enterprise-data-sources.md</code>. For a
 per-field gap analysis, see <code>docs/evaluations/sec-edgar-coverage.md</code>.</p>

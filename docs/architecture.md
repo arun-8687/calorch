@@ -395,32 +395,31 @@ waits in the task hub, not on a running instance.
 
 ---
 
-## Why Durable Functions (vs the original ACA prototype)
+## Why Durable Functions
 
-The first implementation ran the LangGraph `StateGraph` inside a FastAPI
-app on Azure Container Apps. The current architecture keeps LangGraph for
-the per-event agent work but moves **orchestration** to Azure Durable
-Functions:
+Orchestration runs on Azure Durable Functions; the per-event agent work
+runs as LangGraph subgraphs inside activities. The split lines up with
+each tool's strengths:
 
-| Aspect | ACA prototype | **This impl (Durable Functions)** |
-|---|---|---|
-| Orchestration | LangGraph StateGraph in-process | Durable Functions orchestrator |
-| Checkpointer | `PostgresSaver` (extra DB) | Task hub on Azure Storage (no extra DB) |
-| Parallel fan-out | `Send` API | `task_all([call_activity(...)])` |
-| Approval gate | `interrupt()` + Postgres resume | `wait_for_external_event` ⟂ durable timer |
-| Per-execution timeout | unbounded (replica) | 30 min (Flex Consumption) per activity |
-| Scale to zero | yes (replica) | yes (per-execution) |
-| HTTP surface | FastAPI middleware stack | function-key-protected triggers |
-| Idle cost | ~$5/mo (ACR) | ~$0 (no registry, no idle replica) |
-| Multi-day pauses | Postgres-backed | native durable timers |
+| Concern | How Durable Functions handles it |
+|---|---|
+| Orchestration | Deterministic orchestrator function (replayed on every event) |
+| Checkpointing | Task hub on Azure Storage — no extra database to run |
+| Parallel fan-out / fan-in | `task_all([call_activity_with_retry(...)])` |
+| Approval gate | `wait_for_external_event` raced against a durable timer (multi-day pauses are native) |
+| Per-execution timeout | 30 min per activity (Flex Consumption) |
+| Scale to zero | per-execution billing; the approval pause costs nothing |
+| HTTP surface | function-key-protected triggers (`run` / `approval` / `status`) |
+| Retries | `RetryOptions(3 attempts)` per activity |
 
-The agent logic (non-deterministic: LLM calls, HTTP) stays inside
-activities, exactly where Durable Functions wants side effects — the
-orchestrator itself is pure and replay-safe.
+The agent logic is non-deterministic (LLM calls, HTTP), so it lives inside
+activities — exactly where Durable Functions wants side effects — while the
+orchestrator itself stays pure and replay-safe.
 
-The LangGraph `StateGraph` (`calorch.graph.make_graph`) is retained for
-`langgraph dev` and unit tests; it mirrors the same nodes and registry so
-behaviour is identical to the activity path.
+The same pipeline is also assembled as a LangGraph `StateGraph`
+(`calorch.graph.make_graph`) for `langgraph dev` and unit tests; it mirrors
+the same nodes and agent registry, so behaviour is identical to the
+activity path.
 
 For the enterprise-grade data-source strategy (Refinitiv / FactSet / Tiingo
 / FRED / SEC), see `docs/evaluations/enterprise-data-sources.md`. For a

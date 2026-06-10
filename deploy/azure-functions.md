@@ -1,10 +1,7 @@
 # Deploying calorch to Azure — Durable Functions
 
-This is the deployment guide for the **current architecture**: Azure
-Durable Functions as the orchestrator with LangGraph multi-agent
-subgraphs running inside activities. For the legacy Container Apps +
-FastAPI path, see [README.md](README.md) (kept for reference; it does
-not deploy the durable orchestrator).
+This is the deployment guide for calorch: an Azure **Durable Functions**
+app with LangGraph multi-agent subgraphs running inside activities.
 
 ```
                         ┌────────────────────────────────────────────┐

@@ -21,8 +21,6 @@ dependencies = [
   "python-dotenv>=1.0",
   "tenacity>=8.2",
   "jinja2>=3.1",
-  "fastapi>=0.110",
-  "uvicorn[standard]>=0.27",
   "fredapi>=0.5",
   "lxml>=5.0",
   "azure-cosmos>=4.16,<5.0",
@@ -43,7 +41,6 @@ dev = [
 otel = [
   "opentelemetry-api>=1.27",
   "opentelemetry-sdk>=1.27",
-  "opentelemetry-instrumentation-fastapi>=0.48b0",
   "opentelemetry-instrumentation-httpx>=0.48b0",
   "opentelemetry-exporter-otlp-proto-http>=1.27",
 ]

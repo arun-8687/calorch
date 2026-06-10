@@ -100,7 +100,7 @@ class AzureBlobStore:
 
     Connection can be via:
       * Connection string  (``AZURE_STORAGE_CONNECTION_STRING``)
-      * Account URL + DefaultAzureCredential (managed identity on ACA)
+      * Account URL + DefaultAzureCredential (managed identity)
     """
 
     def __init__(

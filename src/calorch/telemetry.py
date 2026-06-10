@@ -197,18 +197,6 @@ def instrument_httpx() -> bool:
         return False
 
 
-def instrument_fastapi(app: Any) -> bool:
-    """Patch a FastAPI app to emit SERVER spans. Returns True if successful."""
-    if not _OTEL_AVAILABLE:
-        return False
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        FastAPIInstrumentor.instrument_app(app)
-        return True
-    except Exception:
-        return False
-
-
 def is_otel_available() -> bool:
     """True if the opentelemetry-api package is importable."""
     return _OTEL_AVAILABLE

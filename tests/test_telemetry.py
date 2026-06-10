@@ -11,7 +11,6 @@ from calorch.telemetry import (
     get_current_span_id,
     get_current_trace_id,
     init_tracing,
-    instrument_fastapi,
     instrument_httpx,
     is_otel_available,
     start_span,
@@ -46,10 +45,18 @@ def test_is_otel_available_is_bool():
 # init_tracing
 # ---------------------------------------------------------------------------
 def test_init_tracing_is_idempotent():
-    """Calling init_tracing twice does not re-initialise the SDK."""
-    r1 = init_tracing(service_name="calorch-test-1")
-    r2 = init_tracing(service_name="calorch-test-1")
-    assert r1 == r2
+    """Calling init_tracing twice does not re-initialise the SDK.
+
+    After the first call the module marks itself initialised, so a second
+    call short-circuits to True (a no-op) regardless of whether an OTLP
+    endpoint is configured.
+    """
+    import calorch.telemetry as tel
+
+    tel._initialised = False
+    init_tracing(service_name="calorch-test-1")
+    # second call takes the `if _initialised: return True` fast path
+    assert init_tracing(service_name="calorch-test-1") is True
 
 
 def test_init_tracing_returns_bool():
@@ -61,12 +68,6 @@ def test_init_tracing_returns_bool():
 # ---------------------------------------------------------------------------
 def test_instrument_httpx_returns_bool():
     assert isinstance(instrument_httpx(), bool)
-
-
-def test_instrument_fastapi_returns_bool():
-    """A non-FastAPI object should fail safely (return False) without crashing."""
-    result = instrument_fastapi(object())
-    assert isinstance(result, bool)
 
 
 # ---------------------------------------------------------------------------
