@@ -71,6 +71,9 @@ class Context:
     providers: Any = None                 # calorch.providers.ProviderBundle (free sources: FRED, iXBRL, EFTS)
     cik_lookup: Any = None                # callable(ticker) -> CIK (for iXBRL/EFTS enrichment)
     blob_store: Any = None                # calorch.blob_store.BlobStore (or NullBlobStore)
+    knowledge: Any = None                 # calorch.knowledge store (AI Search RAG, or NullKnowledgeStore)
+    rag_top_k: int = 4                    # passages to retrieve per enrichment call
+    knowledge_writeback: bool = True      # index each prepared analysis for future RAG
 
     def out(self, name: str) -> Path:
         p = self.output_dir / name
@@ -419,10 +422,15 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
             log.warning("blob input upload failed for %s: %s", ev.id, e)
 
     # --- 2) analysis & DOCX ---
+    # Augment the enrichment LLM with institutional-knowledge RAG (no-op
+    # unless Azure AI Search is configured); classification is left un-augmented.
+    from calorch.knowledge import maybe_wrap_for_rag
+
+    enrich_llm = maybe_wrap_for_rag(c.llm, getattr(c, "knowledge", None), top_k=getattr(c, "rag_top_k", 4))
     analysis = None
     try:
         analysis = build_analysis(
-            cls.final_label, ev, cls, ed, c.llm,
+            cls.final_label, ev, cls, ed, enrich_llm,
             providers=c.providers, cik_lookup=c.cik_lookup,
         )
         analysis.confidence = cls.confidence
@@ -476,6 +484,21 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
                 )
             except (OSError, ValueError) as e:
                 log.warning("blob analysis JSON upload failed for %s: %s", ev.id, e)
+        # --- 2d) write the analysis into the knowledge index (RAG corpus) ---
+        knowledge = getattr(c, "knowledge", None)
+        if knowledge is not None and getattr(c, "knowledge_writeback", True) and analysis is not None:
+            # Best-effort: never let indexing failures fail the run.
+            knowledge.index_analysis(
+                {
+                    "event_id": analysis.event_id,
+                    "event_type": analysis.event_type.value,
+                    "title": analysis.title,
+                    "sections": analysis.sections,
+                    "tickers": analysis.tickers,
+                    "confidence": analysis.confidence,
+                },
+                run_id=run_name,
+            )
     except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
         log.exception("docx generation I/O failure for %s", ev.id)
         errors.append(f"docx:{ev.id}:{e!r}")

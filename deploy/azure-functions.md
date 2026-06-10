@@ -157,7 +157,6 @@ for the authoritative list and defaults). Set them with
 | `CRON_SCHEDULE` | `0 0 9 * * 1` (default) | Timer trigger — NCRONTAB with seconds; default is Mondays 09:00 UTC. Read at import time, so changing it requires an app restart |
 | `OUTPUT_DIR` | `/tmp/calorch-out` | Artifact scratch dir. **Required on Azure**: the package mount is read-only, the code default `./out` will fail. Artifacts are persisted to blob storage; `/tmp` is fine as scratch |
 | `SEC_CACHE_DIR` | `/tmp/calorch-cache/sec` | Same reason as above |
-| `AUDIT_LOG_PATH` | `/tmp/calorch-out/audit.jsonl` | Same reason as above |
 | `USE_MOCKS` | `false` for production, `true` to smoke-test without credentials | With `true` the app runs end-to-end on seed data and mock clients |
 
 ### 5.2 Blob persistence (inputs/outputs)
@@ -192,14 +191,41 @@ for the authoritative list and defaults). Set them with
 | `GRAPH_USER_ID` | UPN or object ID of the mailbox/calendar to operate as |
 | `ONEDRIVE_DRIVE_ID` | Target drive for DOCX archive |
 
-### 5.5 Repository backend
+### 5.5 Repository backend (delivery idempotency)
 
 | Setting | Value | Purpose |
 |---|---|---|
-| `REPO_BACKEND` | `cosmos` for production (`json` writes to local disk — fine only with `OUTPUT_DIR` scratch + mocks) | Delivery idempotency records live here; with `json` on ephemeral `/tmp` you lose duplicate-send protection across instances, so use Cosmos in production |
-| `COSMOS_ENDPOINT` / `COSMOS_KEY` / `COSMOS_DB` / `COSMOS_CONTAINER` | your account / KV ref / `calorch` / `events` | `az cosmosdb create -n <acct> -g $RG --capabilities EnableServerless` |
+| `REPO_BACKEND` | `table` for production (`json` writes to local disk — only safe with mocks/local dev) | Delivery-idempotency records. `json` on ephemeral `/tmp` is **not shared across scaled-out instances**, so it loses duplicate-send protection — use `table` in production |
+| `REPO_TABLE_NAME` | `calorchdelivery` (default) | Azure Table created in the function app's existing storage account — no extra service, ~cents/mo. Uses the same `AZURE_STORAGE_*` credentials/identity as blob (§5.2) |
 
-### 5.6 Data providers (all optional — degrade gracefully)
+> Azure Table Storage replaces the former Cosmos DB backend for this job:
+> the workload is point read/write by `event_id` with no cross-key
+> contention, which Table serves at a fraction of the cost. Cosmos is only
+> warranted if you later need rich queries over a research corpus — for
+> that, prefer Azure AI Search (§5.6).
+
+### 5.6 Institutional-knowledge RAG (Azure AI Search — optional)
+
+Augments enrichment LLM calls with retrieved prior research and indexes
+each prepared analysis. Leave `AZURE_SEARCH_ENDPOINT` empty to disable
+(no-op). Provision: `az search service create -n <svc> -g $RG --sku basic`
+(or `free` to pilot), then create an index named `calorch-knowledge` with
+fields `id` (key), `content`/`title` (searchable), `event_id`,
+`event_type`, `tickers` (Collection(Edm.String), filterable), `run_id`,
+`confidence` (Edm.Double) — optionally a semantic configuration for
+semantic ranking and a vector field + Azure OpenAI embedding skill for
+vector/hybrid retrieval.
+
+| Setting | Value | Purpose |
+|---|---|---|
+| `AZURE_SEARCH_ENDPOINT` | `https://<svc>.search.windows.net` | Enables RAG when set |
+| `AZURE_SEARCH_INDEX` | `calorch-knowledge` (default) | Target index |
+| `AZURE_SEARCH_API_KEY` | Key Vault reference | Query+index key; omit to use managed identity (grant the app **Search Index Data Contributor**) |
+| `AZURE_SEARCH_SEMANTIC_CONFIG` | name of a semantic config | Enables semantic ranking when set |
+| `RAG_TOP_K` | `4` (default) | Passages injected per enrichment call |
+| `KNOWLEDGE_WRITEBACK` | `true` (default) | Index each prepared analysis (the write side of the loop) |
+
+### 5.7 Data providers (all optional — degrade gracefully)
 
 | Setting | Purpose |
 |---|---|
@@ -209,7 +235,7 @@ for the authoritative list and defaults). Set them with
 | `USE_FRED`, `USE_FED_H15`, `USE_IXBRL_SEGMENTS`, `USE_SEC_EFTS` | Feature flags, all default `true` |
 | `FACTSET_API_KEY`, `BLOOMBERG_BLPAPI_HOST`, `LSEG_CLIENT_ID`, `SPGLOBAL_API_KEY` | Licensed providers (stubs until wired) |
 
-### 5.7 Extensibility & observability
+### 5.8 Extensibility & observability
 
 | Setting | Purpose |
 |---|---|
@@ -224,7 +250,6 @@ az functionapp config appsettings set -g $RG -n $APP --settings \
   CRON_SCHEDULE="0 0 9 * * 1" \
   OUTPUT_DIR="/tmp/calorch-out" \
   SEC_CACHE_DIR="/tmp/calorch-cache/sec" \
-  AUDIT_LOG_PATH="/tmp/calorch-out/audit.jsonl" \
   USE_MOCKS="false" \
   AZURE_STORAGE_ACCOUNT_URL="https://$STG.blob.core.windows.net" \
   USE_BLOB_PROVIDERS="true" \
@@ -236,9 +261,9 @@ az functionapp config appsettings set -g $RG -n $APP --settings \
   GRAPH_CLIENT_SECRET="@Microsoft.KeyVault(VaultName=$KV;SecretName=graph-client-secret)" \
   GRAPH_USER_ID="research@contoso.com" \
   ONEDRIVE_DRIVE_ID="b!..." \
-  REPO_BACKEND="cosmos" \
-  COSMOS_ENDPOINT="https://<acct>.documents.azure.com:443/" \
-  COSMOS_KEY="@Microsoft.KeyVault(VaultName=$KV;SecretName=cosmos-key)" \
+  REPO_BACKEND="table" \
+  AZURE_SEARCH_ENDPOINT="https://<svc>.search.windows.net" \
+  AZURE_SEARCH_API_KEY="@Microsoft.KeyVault(VaultName=$KV;SecretName=azure-search-key)" \
   SEC_USER_AGENT="Your Name you@example.com"
 ```
 
@@ -453,7 +478,8 @@ app — no secrets in the repo.
 | Function App (Flex) | $0 | pennies (execution time across ~10–200 activity invocations) |
 | Storage (task hub + artifacts) | <$1/mo | negligible |
 | Application Insights | ~free at this volume (sampling on) | — |
-| Cosmos DB serverless | ~$0.25/GB | negligible RU at this volume |
+| Azure Table Storage (idempotency) | included in storage | negligible |
+| Azure AI Search (optional RAG) | $0 Free / ~$75 Basic | flat (only if enabled) |
 | Azure OpenAI | $0 | dominated by token usage: ~1 classify + ~6 enrichment calls per event |
 
 The approval pause costs nothing — state waits in the task hub, not on

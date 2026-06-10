@@ -382,7 +382,7 @@ class GraphOneDriveClient:
 
 
 # ---------------------------------------------------------------------------
-# Repository (JSON or Cosmos-shaped)
+# Repository (JSON for local/dev, Azure Table for production)
 # ---------------------------------------------------------------------------
 class Repository(Protocol):
     def upsert(self, event_id: str, doc: dict[str, Any]) -> None: ...
@@ -395,7 +395,7 @@ class JsonRepository:
 
     Parallel per-event workers (LangGraph Send fan-out) all hit this
     instance concurrently, so a single lock guards read-modify-write.
-    For Cosmos, the SDK handles concurrency on the server.
+    For Azure Table, the service handles concurrency server-side.
     """
 
     def __init__(self, path: Path) -> None:
@@ -436,62 +436,101 @@ class JsonRepository:
         return None
 
 
-class CosmosRepository:
-    """Cosmos DB repository using ``event_id`` as the partition key."""
+# Table Storage keys forbid / \ # ? and control chars; sanitise event ids.
+_TABLE_KEY_BAD = re.compile(r"[/\\#?\x00-\x1f\x7f-\x9f]")
 
-    def __init__(self, endpoint: str, key: str, db: str, container: str) -> None:
-        if not endpoint or not key:
-            raise OrchestratorError("COSMOS_ENDPOINT and COSMOS_KEY are required for REPO_BACKEND=cosmos.")
+
+def _table_key(event_id: str) -> str:
+    return _TABLE_KEY_BAD.sub("_", event_id) or "_"
+
+
+class TableRepository:
+    """Azure Table Storage repository for delivery-idempotency records.
+
+    One entity per event: ``PartitionKey = sanitised event_id``,
+    ``RowKey = "delivery"``. Point reads/writes only — there is never more
+    than one writer per event (each event is delivered by exactly one
+    activity), so no cross-key contention. Backed by the function app's
+    existing storage account; ~100x cheaper than Cosmos for this workload.
+
+    Nested values are JSON-encoded into a single ``_doc`` column because
+    Table entities are flat and typed.
+    """
+
+    _ROW_KEY = "delivery"
+
+    def __init__(
+        self,
+        table_name: str,
+        *,
+        connection_string: str | None = None,
+        account_url: str | None = None,
+    ) -> None:
         try:
-            from azure.cosmos import CosmosClient
+            from azure.data.tables import TableClient
         except ImportError as exc:  # pragma: no cover - exercised in deployed image
             raise OrchestratorError(
-                "REPO_BACKEND=cosmos requires the `azure-cosmos` package."
+                "REPO_BACKEND=table requires the `azure-data-tables` package "
+                "(pip install calorch[azure])."
             ) from exc
-        client = CosmosClient(endpoint, credential=key)
-        database = client.get_database_client(db)
-        self._container = database.get_container_client(container)
+
+        if connection_string:
+            self._table = TableClient.from_connection_string(connection_string, table_name=table_name)
+        elif account_url:
+            from azure.identity import DefaultAzureCredential
+
+            self._table = TableClient(
+                endpoint=account_url, table_name=table_name, credential=DefaultAzureCredential()
+            )
+        else:
+            raise OrchestratorError(
+                "REPO_BACKEND=table requires AZURE_STORAGE_CONNECTION_STRING or "
+                "AZURE_STORAGE_ACCOUNT_URL."
+            )
+        try:
+            self._table.create_table()
+        except Exception:  # noqa: BLE001 - already exists
+            pass
 
     def upsert(self, event_id: str, doc: dict[str, Any]) -> None:
         existing = self.get(event_id) or {}
-        self._container.upsert_item(
-            {
-                **existing,
-                **doc,
-                "id": event_id,
-                "event_id": event_id,
-                "updated_at": _now().isoformat(),
-            }
-        )
+        merged = {**existing, **doc, "event_id": event_id, "updated_at": _now().isoformat()}
+        entity = {
+            "PartitionKey": _table_key(event_id),
+            "RowKey": self._ROW_KEY,
+            "_doc": json.dumps(merged, default=str),
+        }
+        from azure.data.tables import UpdateMode
 
-    def all(self) -> list[dict[str, Any]]:
-        return list(
-            self._container.query_items(
-                query="SELECT * FROM c",
-                enable_cross_partition_query=True,
-            )
-        )
+        self._table.upsert_entity(entity, mode=UpdateMode.REPLACE)
 
     def get(self, event_id: str) -> dict[str, Any] | None:
         try:
-            return self._container.read_item(item=event_id, partition_key=event_id)
-        except Exception as exc:
-            try:
-                from azure.cosmos.exceptions import CosmosResourceNotFoundError
-            except ImportError:  # pragma: no cover - import already validated
-                raise
-            if isinstance(exc, CosmosResourceNotFoundError):
-                return None
-            raise
+            from azure.core.exceptions import ResourceNotFoundError
+        except ImportError:  # pragma: no cover
+            ResourceNotFoundError = Exception  # type: ignore[assignment]
+        try:
+            entity = self._table.get_entity(partition_key=_table_key(event_id), row_key=self._ROW_KEY)
+        except ResourceNotFoundError:
+            return None
+        raw = entity.get("_doc")
+        return json.loads(raw) if raw else None
+
+    def all(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for entity in self._table.list_entities():
+            raw = entity.get("_doc")
+            if raw:
+                rows.append(json.loads(raw))
+        return rows
 
 
 def make_repository(settings: Settings) -> Repository:
-    if settings.repo_backend == "cosmos" and not settings.use_mocks:
-        return CosmosRepository(
-            settings.cosmos_endpoint or "",
-            settings.cosmos_key or "",
-            settings.cosmos_db,
-            settings.cosmos_container,
+    if settings.repo_backend == "table" and not settings.use_mocks:
+        return TableRepository(
+            settings.repo_table_name,
+            connection_string=settings.azure_storage_connection_string,
+            account_url=settings.azure_storage_account_url,
         )
     return JsonRepository(settings.repo_path)
 
@@ -734,7 +773,7 @@ __all__ = [
     "make_onedrive_client",
     "Repository",
     "JsonRepository",
-    "CosmosRepository",
+    "TableRepository",
     "make_repository",
     "EnterpriseDataClient",
     "make_enterprise_data_client",

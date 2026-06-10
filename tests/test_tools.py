@@ -13,7 +13,6 @@ import pytest
 from calorch.config import Settings, get_settings
 from calorch.state import OrchestratorError
 from calorch.tools import (
-    CosmosRepository,
     GraphOneDriveClient,
     LocalOneDriveClient,
     _GraphClientReal,
@@ -121,54 +120,61 @@ def test_graph_calendar_view_follows_pagination(settings: Settings):
     assert client._http.calls[1] == ("GET", "https://next", None)
 
 
-def test_cosmos_repository_crud(monkeypatch: pytest.MonkeyPatch):
-    class NotFound(Exception):
-        pass
+def test_table_repository_crud(monkeypatch: pytest.MonkeyPatch):
+    """TableRepository merges, round-trips nested JSON, and lists entities."""
+    from azure.core.exceptions import ResourceNotFoundError
 
-    class Container:
+    class FakeTable:
         def __init__(self) -> None:
-            self.rows: dict[str, dict[str, Any]] = {}
+            self.rows: dict[tuple[str, str], dict[str, Any]] = {}
 
-        def read_item(self, item: str, partition_key: str) -> dict[str, Any]:
-            if item not in self.rows:
-                raise NotFound(item)
-            return dict(self.rows[item])
+        def create_table(self) -> None:
+            pass
 
-        def upsert_item(self, row: dict[str, Any]) -> None:
-            self.rows[row["id"]] = dict(row)
+        def get_entity(self, partition_key: str, row_key: str) -> dict[str, Any]:
+            key = (partition_key, row_key)
+            if key not in self.rows:
+                raise ResourceNotFoundError(key)
+            return dict(self.rows[key])
 
-        def query_items(self, **_: Any):
+        def upsert_entity(self, entity: dict[str, Any], mode: Any = None) -> None:
+            self.rows[(entity["PartitionKey"], entity["RowKey"])] = dict(entity)
+
+        def list_entities(self):
             return list(self.rows.values())
 
-    container = Container()
+    fake = FakeTable()
 
-    class Client:
-        def __init__(self, endpoint: str, credential: str) -> None:
-            assert endpoint == "https://cosmos.example"
-            assert credential == "key"
+    class FakeTableClient:
+        @classmethod
+        def from_connection_string(cls, conn: str, table_name: str) -> FakeTable:
+            assert conn == "UseDevelopmentStorage=true"
+            return fake
 
-        def get_database_client(self, db: str):
-            assert db == "calorch"
-            return self
+    data_tables = types.ModuleType("azure.data.tables")
+    data_tables.TableClient = FakeTableClient
 
-        def get_container_client(self, name: str):
-            assert name == "events"
-            return container
+    class UpdateMode:
+        REPLACE = "replace"
 
-    azure = types.ModuleType("azure")
-    cosmos = types.ModuleType("azure.cosmos")
-    exceptions = types.ModuleType("azure.cosmos.exceptions")
-    cosmos.CosmosClient = Client
-    exceptions.CosmosResourceNotFoundError = NotFound
-    azure.cosmos = cosmos
-    monkeypatch.setitem(sys.modules, "azure", azure)
-    monkeypatch.setitem(sys.modules, "azure.cosmos", cosmos)
-    monkeypatch.setitem(sys.modules, "azure.cosmos.exceptions", exceptions)
+    data_tables.UpdateMode = UpdateMode
+    monkeypatch.setitem(sys.modules, "azure.data.tables", data_tables)
 
-    repo = CosmosRepository("https://cosmos.example", "key", "calorch", "events")
+    from calorch.tools import TableRepository
+
+    repo = TableRepository("calorchdelivery", connection_string="UseDevelopmentStorage=true")
     assert repo.get("ev-1") is None
-    repo.upsert("ev-1", {"subject": "First"})
-    repo.upsert("ev-1", {"confidence": 0.9})
-    assert repo.get("ev-1")["subject"] == "First"
-    assert repo.get("ev-1")["confidence"] == 0.9
+    repo.upsert("ev-1", {"subject": "First", "to": ["a@x.com"]})
+    repo.upsert("ev-1", {"confidence": 0.9})  # merge, not overwrite
+    rec = repo.get("ev-1")
+    assert rec["subject"] == "First"          # preserved across merge
+    assert rec["confidence"] == 0.9
+    assert rec["to"] == ["a@x.com"]           # nested value round-trips
     assert len(repo.all()) == 1
+
+
+def test_table_key_sanitises_forbidden_chars():
+    from calorch.tools import _table_key
+
+    assert _table_key("ev/with#bad?chars") == "ev_with_bad_chars"
+    assert _table_key("") == "_"

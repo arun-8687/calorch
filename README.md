@@ -40,11 +40,11 @@ flowchart TB
         M365["Microsoft Graph<br/>Outlook · Mail · OneDrive"]
         OPENAI["Azure OpenAI<br/>classify + enrich"]
         SECFRED["SEC EDGAR · FRED · FOMC H.15 · Tiingo"]
+        SEARCH["Azure AI Search<br/>institutional-knowledge RAG"]
     end
 
     subgraph AZURE["Azure platform"]
-        STG[("Storage account<br/>task hub + calorch-inputs/outputs")]
-        COSMOS[("Cosmos DB<br/>delivery idempotency")]
+        STG[("Storage account<br/>task hub + Table (idempotency) + blob in/out")]
         AI[("Application Insights")]
         KV[("Key Vault<br/>secrets")]
     end
@@ -56,9 +56,10 @@ flowchart TB
     A1 <--> M365
     A2 <--> OPENAI
     SUB <--> SECFRED
+    SUB <-->|retrieve + index| SEARCH
     SUB <--> OPENAI
     A4 <--> M365
-    A4 --> COSMOS
+    A4 --> STG
     ORC <--> STG
     SUB --> STG
     FUNC -.-> AI
@@ -171,6 +172,26 @@ Uses `llm.invoke()` with a JSON prompt — no `response_format` / JSON mode requ
 | **Grounding Rule** | "ONLY use data explicitly provided in context. Do NOT use training data." |
 | **Thinking-Block Filter** | 150+ phrase blacklist + 70% threshold. If model outputs reasoning, response is discarded and template fallback is used |
 | **Fallback Content** | Every template section has data-driven fallback — no blank sections |
+
+### Institutional-knowledge RAG (Azure AI Search)
+
+When `AZURE_SEARCH_ENDPOINT` is configured, enrichment LLM calls are
+augmented with retrieved prior research (`calorch.knowledge`):
+
+- **Retrieve** — before each enrichment call, `RagChatModel` queries Azure
+  AI Search with the section prompt (filtered to the event's ticker) and
+  injects the top-K passages into the prompt as *additional provided
+  context*, so the model grounds new briefs in the firm's own research
+  history without violating the no-training-data rule.
+- **Index** — after each event's analysis is built, its structured record
+  (title + section text + tickers + confidence) is upserted into the
+  index, so the corpus grows with every run (`KNOWLEDGE_WRITEBACK`).
+
+It's a *derived* index over the `calorch-outputs` blob corpus, never a
+system of record. Unconfigured → `NullKnowledgeStore` → the whole feature
+is a zero-overhead no-op (the default in local/demo runs). Retrieval and
+indexing are both best-effort: a Search outage degrades to un-augmented
+enrichment, never a failed run.
 
 ---
 
@@ -341,7 +362,9 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `ONEDRIVE_DRIVE_ID` | No | OneDrive target for DOCX archive |
 | `AZURE_STORAGE_ACCOUNT_URL` *or* `AZURE_STORAGE_CONNECTION_STRING` | Yes (prod) | Blob persistence (`calorch-inputs`/`calorch-outputs`); account URL = managed identity |
 | `USE_BLOB_PROVIDERS` | No | Read pre-ingested data from blob (default `true`) |
-| `REPO_BACKEND` | No | `cosmos` (prod, idempotency) or `json` (local); `COSMOS_*` when cosmos |
+| `REPO_BACKEND` | No | `table` (prod — Azure Table for delivery idempotency, in the storage account) or `json` (local); `REPO_TABLE_NAME` names the table |
+| `AZURE_SEARCH_ENDPOINT` / `AZURE_SEARCH_INDEX` / `AZURE_SEARCH_API_KEY` | No | Azure AI Search RAG over the research corpus — empty disables it (no-op) |
+| `AZURE_SEARCH_SEMANTIC_CONFIG` / `RAG_TOP_K` / `KNOWLEDGE_WRITEBACK` | No | Semantic-ranking config name; passages retrieved per enrichment call (default 4); index each prepared analysis (default `true`) |
 | `OUTPUT_DIR` / `SEC_CACHE_DIR` / `AUDIT_LOG_PATH` | Yes (Azure) | Point at `/tmp/...` — the package mount is read-only |
 | `SEC_USER_AGENT` | Yes (prod) | `"Your Name you@example.com"` — SEC requires a real contact |
 | `SEC_WATCHLIST` | No | Ingestion tickers (default 10 mega-caps) |
@@ -420,7 +443,8 @@ Azure Durable Functions on **Flex Consumption** (scale-to-zero, per-execution bi
 | Azure OpenAI (~100 calls/week) | ~$8–20 (token-driven) |
 | SEC EDGAR + FRED + FOMC H.15 (unlimited, fair-use) | Free |
 | Tiingo EOD (optional) | $50.00 |
-| Cosmos DB Serverless | ~$0.25 |
+| Azure Table Storage (delivery idempotency) | ~$0 (cents) |
+| Azure AI Search (optional — institutional-knowledge RAG) | $0 Free tier / ~$75 Basic |
 | Azure Key Vault | ~$1.00 |
 | Application Insights + Log Analytics | ~$5.00 |
 | **Total (without Tiingo)** | **~$15–28/mo** |
@@ -467,7 +491,7 @@ approve, reject, and timeout paths — no Azure runtime required.
 - **HTTP auth** — the `run`/`approval`/`status` triggers use Azure **function keys** (`?code=`); distribute the approval key only to approvers. Rotate via `az functionapp keys set`.
 - **Scaling & timeouts** — the Functions host scales 0→N and enforces `functionTimeout` (30 min); a hung activity is killed by the host.
 - **Retries** — `RetryOptions(3 attempts)` on every activity; transient Graph/SEC/LLM failures are retried automatically.
-- **Secrets** — Key Vault references in app settings; managed identity for blob/Cosmos.
+- **Secrets** — Key Vault references in app settings; managed identity for blob/table/search.
 - **Observability** — Application Insights wired at app creation; durable instance state queryable via `func durable` and `GET /api/status/{id}`.
 
 | Var | Default | Purpose |
