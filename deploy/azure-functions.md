@@ -131,8 +131,8 @@ az role assignment create --assignee $PRINCIPAL_ID \
 # add your secrets (repeat per secret)
 az keyvault secret set --vault-name $KV -n azure-openai-api-key  --value "<key>"
 az keyvault secret set --vault-name $KV -n graph-client-secret   --value "<secret>"
-az keyvault secret set --vault-name $KV -n tiingo-api-key        --value "<key>"
-az keyvault secret set --vault-name $KV -n fred-api-key          --value "<key>"
+az keyvault secret set --vault-name $KV -n alphasense-api-key    --value "<key>"
+az keyvault secret set --vault-name $KV -n alphasense-password   --value "<password>"
 ```
 
 A Key Vault reference in an app setting looks like:
@@ -227,15 +227,15 @@ vector/hybrid retrieval.
 | `RAG_TOP_K` | `4` (default) | Passages injected per enrichment call |
 | `KNOWLEDGE_WRITEBACK` | `true` (default) | Index each prepared analysis (the write side of the loop) |
 
-### 5.7 Data providers (all optional — degrade gracefully)
+### 5.7 Data sources (SEC EDGAR + AlphaSense only)
 
 | Setting | Purpose |
 |---|---|
 | `SEC_USER_AGENT` | **Set a real contact** (`"Your Name you@example.com"`) — SEC EDGAR requires it |
 | `SEC_WATCHLIST` | CSV of tickers for ingestion (default 10 mega-caps) |
-| `TIINGO_API_KEY`, `FRED_API_KEY` | Prices/consensus, macro |
-| `USE_FRED`, `USE_FED_H15`, `USE_IXBRL_SEGMENTS`, `USE_SEC_EFTS` | Feature flags, all default `true` |
-| `FACTSET_API_KEY`, `BLOOMBERG_BLPAPI_HOST`, `LSEG_CLIENT_ID`, `SPGLOBAL_API_KEY` | Licensed providers (stubs until wired) |
+| `USE_IXBRL_SEGMENTS`, `USE_SEC_EFTS` | SEC feature flags (default `true`) |
+| `ALPHASENSE_API_KEY` / `ALPHASENSE_CLIENT_ID` / `ALPHASENSE_CLIENT_SECRET` / `ALPHASENSE_USERNAME` / `ALPHASENSE_PASSWORD` | AlphaSense OAuth2 credentials (Key Vault refs). Empty → narrative/transcripts/sentiment degrade to empty |
+| `ALPHASENSE_BASE_URL`, `USE_ALPHASENSE` | API base (default `https://api.alpha-sense.com`); set `USE_ALPHASENSE=false` to disable |
 
 ### 5.8 Extensibility & observability
 
@@ -359,7 +359,7 @@ az storage blob list --account-name $STG -c calorch-outputs --auth-mode login \
 
 The orchestrator reads pre-ingested provider data from
 `calorch-inputs` (`USE_BLOB_PROVIDERS=true`); the ingestion pipeline
-(`calorch.data_ingestion.run_daily_ingestion`) fetches SEC/FRED/Tiingo
+(`calorch.data_ingestion.run_daily_ingestion`) fetches SEC EDGAR + AlphaSense
 data and writes it there. It is intentionally **not** wired into the
 weekly orchestrator. Options:
 

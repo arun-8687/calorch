@@ -69,7 +69,7 @@ class Context:
     output_dir: Path
     send_emails: bool = False             # if False, create drafts only
     to_addresses: list[str] | None = None  # override recipients
-    providers: Any = None                 # calorch.providers.ProviderBundle (free sources: FRED, iXBRL, EFTS)
+    providers: Any = None                 # calorch.providers.ProviderBundle (SEC EDGAR + AlphaSense)
     cik_lookup: Any = None                # callable(ticker) -> CIK (for iXBRL/EFTS enrichment)
     blob_store: Any = None                # calorch.blob_store.BlobStore (or NullBlobStore)
     knowledge: Any = None                 # calorch.knowledge store (AI Search RAG, or NullKnowledgeStore)

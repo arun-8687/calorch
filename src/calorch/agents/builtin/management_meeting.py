@@ -6,11 +6,11 @@ from typing import Any
 from calorch.agents.base import AgentSpec, register
 from calorch.analysis import (
     EventAnalysis,
-    add_macro_table_to,
+    add_sentiment_table_to,
     base_analysis,
     build_with_template,
-    enrich_macro,
     enrich_segments,
+    enrich_sentiment,
     resolve_primary_ticker_and_cik,
     segment_table_rows,
     ticker_context,
@@ -27,11 +27,10 @@ def build_management_meeting(ev, cls, ed, llm_call, *, providers=None, cik_looku
 
     a_base = base_analysis(f"Management Meeting — {role}", ev, cls, ed)
     primary_ticker, cik = resolve_primary_ticker_and_cik(a_base, cik_lookup)
-    macro = enrich_macro(providers)
     seg = enrich_segments(providers, cik, primary_ticker)
 
     data_tables: dict[str, Any] = {}
-    add_macro_table_to(data_tables, macro)
+    add_sentiment_table_to(data_tables, enrich_sentiment(providers, primary_ticker))
     if seg:
         data_tables["product_segments"] = {
             "headers": [f"Segment ({primary_ticker})", "Revenue", "Period end"],

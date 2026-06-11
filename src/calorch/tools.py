@@ -15,7 +15,6 @@ import shutil
 import threading
 import time
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -542,41 +541,27 @@ def make_repository(settings: Settings) -> Repository:
 
 
 # ---------------------------------------------------------------------------
-# Enterprise data (FactSet / Bloomberg / LSEG / S&P)
+# Enterprise data (SEC EDGAR XBRL company facts)
 # ---------------------------------------------------------------------------
 class EnterpriseDataClient(Protocol):
     def fetch(self, topic: str, *, tickers: Iterable[str] = ()) -> dict[str, Any]: ...
 
 
-@dataclass
-class _FactSetFacts:
-    consensus: dict[str, Any]
-    guidance: str
-    transcript_excerpt: str
-
-
 class _EnterpriseDataClientImpl:
-    """Consolidated FactSet/Bloomberg/LSEG/S&P/SEC adapter.
+    """SEC EDGAR enterprise-data adapter.
 
-    In demo mode it returns deterministic synthetic data shaped like what a
-    real provider would return. In production each branch hits its SDK
-    (Open:FactSet, BLPAPI, lseg-data, Xpressfeed) and the `httpx` async
-    client is used for HTTP fallbacks. SEC XBRL companyfacts are merged
-    in whenever a real SEC client is available, so the briefing table
-    always carries actual revenue / EPS / net income.
+    Pulls real SEC XBRL companyfacts (revenue / EPS / net income) whenever a
+    SEC client is available, so the briefing table carries actual numbers; in
+    demo mode (or when SEC is unavailable) it returns deterministic synthetic
+    data of the same shape. The richer qualitative layer (guidance,
+    transcripts, sentiment) comes from AlphaSense via the provider bundle, not
+    this client.
     """
 
     def __init__(self, settings: Settings, sec: Any = None) -> None:
         self._s = settings
         self._sec = sec
-        has_real_source = bool(
-            settings.factset_api_key
-            or settings.bloomberg_blpapi_host
-            or settings.lseg_client_id
-            or settings.spglobal_api_key
-            or sec is not None
-        )
-        self._mock = settings.use_mocks or not has_real_source
+        self._mock = settings.use_mocks or sec is None
 
     def fetch(self, topic: str, *, tickers: Iterable[str] = ()) -> dict[str, Any]:
         tickers = [t.upper() for t in tickers] or ["AAPL", "MSFT"]
@@ -590,11 +575,9 @@ class _EnterpriseDataClientImpl:
                         sec_snap[t] = facts
                 except Exception:
                     continue
-        if self._mock and not sec_snap:
-            return self._mock_payload(topic, tickers)
         if sec_snap:
             return self._sec_payload(topic, tickers, sec_snap)
-        return self._live_payload(topic, tickers)
+        return self._mock_payload(topic, tickers)
 
     def _sec_payload(
         self, topic: str, tickers: list[str], sec_snap: dict[str, dict[str, Any]]
@@ -646,37 +629,6 @@ class _EnterpriseDataClientImpl:
                 "to deliver the high end of our full-year guidance range."
             ),
         }
-
-    def _live_payload(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        # Each provider is hit conditionally. Only FactSet is shown; the
-        # rest follow the same pattern (BLPAPI, lseg-data, Xpressfeed).
-        out: dict[str, Any] = {"source": "live", "topic": topic, "as_of": _now().isoformat()}
-        if self._s.factset_api_key:
-            out["factset"] = self._factset(topic, tickers)
-        if self._s.bloomberg_blpapi_host:
-            out["bloomberg"] = self._bloomberg(topic, tickers)
-        if self._s.lseg_client_id:
-            out["lseg"] = self._lseg(topic, tickers)
-        if self._s.spglobal_api_key:
-            out["sp_capital_iq"] = self._spcapitaliq(topic, tickers)
-        return out
-
-    def _factset(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        # Real call would be:
-        #   from factset import FactSet
-        #   client = FactSet(api_key=self._s.factset_api_key)
-        #   return client.fundamentals(tickers, fields=("FE_EST_EPS", "FE_EST_REV"))
-        return {"vendor": "factset", "endpoint": "Open:FactSet fundamentals", "tickers": tickers, "topic": topic}
-
-    def _bloomberg(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        return {"vendor": "bloomberg", "endpoint": "BLPAPI //BQL", "tickers": tickers, "topic": topic}
-
-    def _lseg(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        return {"vendor": "lseg", "endpoint": "Datastream RDTH", "tickers": tickers, "topic": topic}
-
-    def _spcapitaliq(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        return {"vendor": "sp_capital_iq", "endpoint": "Xpressfeed v3", "tickers": tickers, "topic": topic}
-
 
 def make_enterprise_data_client(settings: Settings) -> EnterpriseDataClient:
     sec = None
@@ -811,15 +763,12 @@ def make_cik_lookup(settings: Settings):
 def make_providers(settings: Settings) -> ProviderBundle:
     """Build the active provider bundle for this run.
 
-    Resolution order per provider:
-      * Macro:     FRED (preferred, falls back to no-key) + FOMC H.15
-      * Segments:  SEC iXBRL (real parser) or stub
-      * Narrative: SEC EFTS (real search) or stub
-      * Price:     stub only (no free enterprise-grade source)
-      * Consensus: stub only (no free source — requires terminal)
+    Sources:
+      * SEC EDGAR  — fundamentals + segments (iXBRL), filing search (EFTS)
+      * AlphaSense — narrative/guidance, transcripts/expert calls, sentiment
 
     The bundle is cheap to construct (no network); the underlying clients
-    cache per-run. Swap to a paid provider by setting the relevant env var.
+    cache per-run. See ``calorch.providers.build_providers``.
     """
     from calorch.providers import build_providers as _build
 

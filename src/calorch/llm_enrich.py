@@ -5,8 +5,7 @@ narrative for report sections.
 strict grounding instruction: the model MUST only use the data supplied in the
 ``Context`` block and must NOT rely on training data, memory, or external
 knowledge.  This prevents hallucination and ensures every bullet is traceable
-to a real data source (SEC EDGAR, FRED, Tiingo, FOMC H.15, or the internal
-stub/curated dataset).
+to a real data source (SEC EDGAR or AlphaSense).
 
 **Usage**
   enricher = LlmEnricher(llm_client)

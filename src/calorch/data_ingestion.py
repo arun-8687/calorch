@@ -2,7 +2,7 @@
 
 This is a separate pipeline from the orchestrator. It runs independently
 (typically on a timer, e.g., daily after market close) to fetch fresh data
-from SEC, FRED, Tiingo, etc. and store it in Azure Blob Storage.
+from SEC EDGAR and AlphaSense and store it in Azure Blob Storage.
 
 The orchestrator reads from the same blob storage — it never makes live API calls.
 
@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, UTC
-from pathlib import Path
 from typing import Any
 
 from calorch.blob_store import BlobStore, make_blob_store
@@ -72,89 +71,46 @@ class IngestionPipeline:
         self._s = get_settings()
         self._log: list[str] = []
 
-    # -- Macro: FRED + H.15 ------------------------------------------------
-    def ingest_macro(self) -> dict[str, Any]:
-        """Ingest FRED + H.15 macro snapshot."""
-        from calorch.fred import FredClient
-        from calorch.fed_h15 import FedH15Client
-
-        snap: dict[str, Any] = {}
-        errors: list[str] = []
-
-        if self._s.fred_api_key or self._s.use_fred:
-            try:
-                fred = FredClient(api_key=self._s.fred_api_key, cache_dir=Path(".cache/fred"))
-                snap.update(fred.snapshot())
-                self._log.append("FRED ingested")
-            except Exception as e:
-                log.warning("FRED ingestion failed: %s", e)
-                errors.append(f"fred:{e}")
-
-        if self._s.use_fed_h15:
-            try:
-                h15 = FedH15Client(cache_dir=Path(".cache/fed"))
-                h15_snap = h15.snapshot()
-                # Merge H.15 data into the same snapshot
-                for sid, entry in h15_snap.items():
-                    if isinstance(entry, dict) and "value" in entry:
-                        snap.setdefault(sid, entry)
-                self._log.append("FOMC H.15 ingested")
-            except Exception as e:
-                log.warning("H.15 ingestion failed: %s", e)
-                errors.append(f"h15:{e}")
-
-        # Store in blob
-        path = _blob_path("macro", date=self._date)
-        self._blob.upload_json(self._blob.input_container, path, snap, metadata={"date": self._date, "sources": "fred,h15"})
-        return {"status": "ok", "date": self._date, "path": path, "errors": errors, "log": self._log[-2:]}
-
-    # -- Price: Tiingo ----------------------------------------------------
-    def ingest_price(self, ticker: str) -> dict[str, Any]:
-        """Ingest Tiingo price data for one ticker."""
-        from calorch.tiingo import TiingoClient
-
-        if not self._s.tiingo_api_key:
-            return {"status": "skipped", "ticker": ticker, "reason": "TIINGO_API_KEY not set"}
-
+    # -- AlphaSense: narrative + transcripts + sentiment ------------------
+    def _alphasense(self) -> Any:
+        """Build the shared AlphaSense client, or None when unconfigured."""
+        if not (self._s.use_alphasense and self._s.alphasense_api_key):
+            return None
         try:
-            client = TiingoClient(api_key=self._s.tiingo_api_key, cache_dir=Path(".cache/tiingo"))
-            quote = client.quote(ticker)
-            ohlcv = client.ohlcv(ticker)
+            from calorch.alphasense import AlphaSenseClient
+
+            return AlphaSenseClient(
+                api_key=self._s.alphasense_api_key,
+                client_id=self._s.alphasense_client_id,
+                client_secret=self._s.alphasense_client_secret,
+                username=self._s.alphasense_username,
+                password=self._s.alphasense_password,
+                base_url=self._s.alphasense_base_url,
+            )
+        except (ValueError, ImportError) as e:
+            log.warning("AlphaSense client unavailable: %s", e)
+            return None
+
+    def ingest_alphasense(self, ticker: str, client: Any | None = None) -> dict[str, Any]:
+        """Ingest AlphaSense narrative, transcripts and sentiment for a ticker."""
+        client = client or self._alphasense()
+        if client is None:
+            return {"status": "skipped", "ticker": ticker, "reason": "AlphaSense not configured"}
+        try:
+            narrative = client.guidance_hits(ticker, limit=10)
+            transcripts = client.transcript_hits(ticker, limit=10)
+            sentiment = client.sentiment(ticker)
         except Exception as e:
-            log.warning("Tiingo price ingestion failed for %s: %s", ticker, e)
+            log.warning("AlphaSense ingestion failed for %s: %s", ticker, e)
             return {"status": "error", "ticker": ticker, "error": str(e)}
 
-        # Store quote
-        path = _blob_path("price", ticker=ticker, date=self._date)
-        self._blob.upload_json(self._blob.input_container, path, quote, metadata={"ticker": ticker, "date": self._date})
+        meta = {"ticker": ticker, "date": self._date}
+        self._blob.upload_json(self._blob.input_container, f"inputs/narrative/{ticker}/{self._date}.json", narrative, metadata=meta)
+        self._blob.upload_json(self._blob.input_container, f"inputs/transcripts/{ticker}/{self._date}.json", transcripts, metadata=meta)
+        self._blob.upload_json(self._blob.input_container, f"inputs/sentiment/{ticker}/{self._date}.json", sentiment, metadata=meta)
+        self._log.append(f"AlphaSense {ticker} ingested")
+        return {"status": "ok", "ticker": ticker}
 
-        # Store OHLCV
-        ohlcv_path = f"inputs/price/{ticker}/{self._date}_ohlcv.json"
-        self._blob.upload_json(self._blob.input_container, ohlcv_path, ohlcv, metadata={"ticker": ticker, "date": self._date})
-
-        self._log.append(f"Tiingo price {ticker} ingested")
-        return {"status": "ok", "ticker": ticker, "path": path, "ohlcv_path": ohlcv_path}
-
-    # -- Consensus: Tiingo --------------------------------------------------
-    def ingest_consensus(self, ticker: str) -> dict[str, Any]:
-        """Ingest Tiingo consensus estimates for one ticker."""
-        from calorch.tiingo import TiingoClient
-
-        if not self._s.tiingo_api_key:
-            return {"status": "skipped", "ticker": ticker, "reason": "TIINGO_API_KEY not set"}
-
-        try:
-            client = TiingoClient(api_key=self._s.tiingo_api_key, cache_dir=Path(".cache/tiingo"))
-            estimates = client.estimates(ticker)
-        except Exception as e:
-            log.warning("Tiingo consensus ingestion failed for %s: %s", ticker, e)
-            return {"status": "error", "ticker": ticker, "error": str(e)}
-
-        path = _blob_path("consensus", ticker=ticker, date=self._date)
-        self._blob.upload_json(self._blob.input_container, path, estimates, metadata={"ticker": ticker, "date": self._date})
-
-        self._log.append(f"Tiingo consensus {ticker} ingested")
-        return {"status": "ok", "ticker": ticker, "path": path}
 
     # -- Fundamentals: SEC iXBRL ------------------------------------------
     def ingest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
@@ -198,37 +154,34 @@ class IngestionPipeline:
         self._log.append(f"SEC segments {ticker} ingested")
         return {"status": "ok", "cik": cik, "ticker": ticker, "path": path, "geo_path": geo_path}
 
-    # -- Narrative: SEC EFTS ----------------------------------------------
-    def ingest_narrative(self, cik: str, ticker: str) -> dict[str, Any]:
-        """Ingest SEC EFTS guidance excerpts for one ticker."""
+    # -- Filings: SEC EFTS ------------------------------------------------
+    def ingest_filings(self, cik: str, ticker: str) -> dict[str, Any]:
+        """Ingest SEC EFTS filing guidance excerpts for one ticker."""
         from calorch.sec_efts import SecEftsClient
 
         try:
             client = SecEftsClient(user_agent=self._s.sec_user_agent, cache_dir=self._s.sec_cache_dir / "efts")
             guidance = client.search_guidance(cik=cik, ticker=ticker, limit=10)
         except Exception as e:
-            log.warning("SEC EFTS narrative ingestion failed for %s: %s", ticker, e)
+            log.warning("SEC EFTS filings ingestion failed for %s: %s", ticker, e)
             return {"status": "error", "cik": cik, "ticker": ticker, "error": str(e)}
 
-        path = _blob_path("narrative", ticker=ticker, cik=cik, date=self._date)
+        path = f"inputs/filings/{cik}/{ticker}/{self._date}.json"
         self._blob.upload_json(self._blob.input_container, path, guidance, metadata={"ticker": ticker, "cik": cik, "date": self._date})
 
-        self._log.append(f"SEC EFTS {ticker} ingested")
+        self._log.append(f"SEC EFTS filings {ticker} ingested")
         return {"status": "ok", "cik": cik, "ticker": ticker, "path": path}
 
     # -- Run all for a list of tickers ------------------------------------
     def run(self, tickers: list[str], cik_lookup: Any | None = None) -> dict[str, Any]:
         """Run the full ingestion pipeline for a list of tickers.
 
-        Steps:
-          1. Ingest macro data (FRED + H.15)
-          2. For each ticker:
-             a. Ingest price + consensus (Tiingo)
-             b. Ingest fundamentals + segments + narrative (SEC)
+        Per ticker:
+          * SEC EDGAR  — fundamentals + segments + filing guidance (needs CIK)
+          * AlphaSense — narrative + transcripts + sentiment (keyed on ticker)
         """
-        results: dict[str, Any] = {"macro": self.ingest_macro(), "tickers": {}}
+        results: dict[str, Any] = {"tickers": {}}
 
-        # Resolve CIK for SEC data
         if cik_lookup is None:
             try:
                 from calorch.sec import SecEdgarClient
@@ -238,10 +191,10 @@ class IngestionPipeline:
                 log.warning("CIK lookup unavailable, skipping SEC ingestion: %s", e)
                 cik_lookup = None
 
+        alphasense = self._alphasense()  # build once, reuse across tickers
+
         for ticker in tickers:
             ticker_results: dict[str, Any] = {}
-            ticker_results["price"] = self.ingest_price(ticker)
-            ticker_results["consensus"] = self.ingest_consensus(ticker)
 
             if cik_lookup:
                 try:
@@ -249,11 +202,12 @@ class IngestionPipeline:
                     if cik:
                         ticker_results["fundamentals"] = self.ingest_fundamentals(cik, ticker)
                         ticker_results["segments"] = self.ingest_segments(cik, ticker)
-                        ticker_results["narrative"] = self.ingest_narrative(cik, ticker)
+                        ticker_results["filings"] = self.ingest_filings(cik, ticker)
                 except Exception as e:
                     log.warning("SEC ingestion failed for %s: %s", ticker, e)
                     ticker_results["sec_error"] = str(e)
 
+            ticker_results["alphasense"] = self.ingest_alphasense(ticker, client=alphasense)
             results["tickers"][ticker] = ticker_results
 
         results["log"] = self._log

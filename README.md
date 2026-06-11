@@ -5,7 +5,8 @@
 > **Azure Durable Functions** orchestrator with **LangGraph** multi-agent
 > subgraphs for equity research prep-pack automation. Ingests Outlook
 > calendar events, classifies them into 8 research workflows, enriches with
-> live SEC EDGAR / FRED / FOMC H.15 data, generates DOCX briefs with
+> live SEC EDGAR (fundamentals/segments/filings) and AlphaSense
+> (guidance/transcripts/sentiment) data, generates DOCX briefs with
 > LLM-powered narrative, and delivers HTML emails via Microsoft Graph — all
 > fanned out in parallel, with a human-in-the-loop approval gate.
 
@@ -39,7 +40,7 @@ flowchart TB
     subgraph EXTERNAL["External services"]
         M365["Microsoft Graph<br/>Outlook · Mail · OneDrive"]
         OPENAI["Azure OpenAI<br/>classify + enrich"]
-        SECFRED["SEC EDGAR · FRED · FOMC H.15 · Tiingo"]
+        SECAS["SEC EDGAR · AlphaSense"]
         SEARCH["Azure AI Search<br/>institutional-knowledge RAG"]
     end
 
@@ -55,7 +56,7 @@ flowchart TB
     A3 -.-> AGENT
     A1 <--> M365
     A2 <--> OPENAI
-    SUB <--> SECFRED
+    SUB <--> SECAS
     SUB <-->|retrieve + index| SEARCH
     SUB <--> OPENAI
     A4 <--> M365
@@ -77,48 +78,50 @@ LangGraph subgraph selected from the [agent registry](#adding-a-new-agent).
 
 ## Enterprise Data Architecture
 
-All data flows through a **Protocol-based provider layer** (`src/calorch/providers.py`). The renderer never knows which implementation is wired — swapping Tiingo for Refinitiv or Bloomberg is a config change, not a code change.
+All data flows through a **Protocol-based provider layer** (`src/calorch/providers.py`), backed by exactly two sources: **SEC EDGAR** (structured numbers) and **AlphaSense** (qualitative). The renderer never knows which implementation is wired.
 
-### Provider Priority Chain
+### Sources
 
-| Priority | Source | Data | Authentication | SLA |
-|----------|--------|------|---------------|-----|
-| 1 | **SEC iXBRL Company Facts** | Revenue, EPS, gross/operating/net margins, ROE, ROA, assets, liabilities, cash, debt, capex, R&D, shares outstanding | None (free, ToS-compliant) | Best-effort |
-| 2 | **SEC iXBRL Instance Docs** | Product segment revenue, geographic revenue (parsed from inline XBRL on 10-Q/10-K) | None (free) | Best-effort |
-| 3 | **SEC EFTS** | Full-text filing search — guidance, outlook, risk factor excerpts | None (free) | Best-effort |
-| 4 | **FOMC H.15** | Full Treasury yield curve (1M→30Y) + effective federal funds rate | None (free, scraped) | Daily |
-| 5 | **FRED** | VIX, S&P 500, WTI oil, gold, BTC, CPI, unemployment, USD/EUR | Optional key (free) | Real-time |
-| 6 | **Tiingo** | EOD price, market cap, analyst consensus, price targets | API key ($50/mo) | Delayed |
+| Provider slot | Source | Data | Authentication |
+|----------|--------|------|---------------|
+| `fundamentals` | **SEC iXBRL Company Facts** | Revenue, EPS, margins, ROE/ROA, cash, debt | None (free, ToS-compliant) |
+| `segments` | **SEC iXBRL Instance Docs** | Product + geographic revenue splits (10-Q/10-K) | None (free) |
+| `filings` | **SEC EFTS** | Full-text filing search — guidance excerpts | None (free) |
+| `narrative` | **AlphaSense** | Guidance / outlook across filings + transcripts | API key (OAuth2) |
+| `transcripts` | **AlphaSense** | Earnings-call / expert-call transcript matches | API key |
+| `sentiment` | **AlphaSense** | Document-level sentiment (-1..1) per ticker | API key |
+
+> There is no price, consensus, or macro provider — those needed third-party
+> market-data vendors (Tiingo / FRED / FOMC H.15) that are out of scope. Those
+> fields render as "—".
 
 ### Provider Contract
 
 ```python
-class PriceProvider(Protocol):
-    def quote(self, ticker: str) -> dict[str, Any]: ...
-
-class ConsensusProvider(Protocol):
-    def estimates(self, ticker: str) -> dict[str, Any]: ...
-    def recommendations(self, ticker: str) -> dict[str, Any]: ...
-
 class FundamentalsProvider(Protocol):
     def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]: ...
-
-class MacroProvider(Protocol):
-    def snapshot(self) -> dict[str, dict[str, Any]]: ...
 
 class SegmentProvider(Protocol):
     def latest_segments(self, cik: str, ticker: str, *, axis: str = "product") -> list[dict[str, Any]]: ...
 
-class NarrativeProvider(Protocol):
+class FilingsProvider(Protocol):       # SEC EFTS
     def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
+
+class NarrativeProvider(Protocol):     # AlphaSense
+    def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
+
+class TranscriptProvider(Protocol):    # AlphaSense
+    def transcript_hits(self, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
+
+class SentimentProvider(Protocol):     # AlphaSense
+    def sentiment(self, ticker: str) -> dict[str, Any]: ...
 ```
 
 In production the orchestrator reads **pre-ingested** provider data from
 Azure Blob Storage (`USE_BLOB_PROVIDERS=true`); a separate ingestion
 pipeline (`calorch.data_ingestion`) populates `calorch-inputs` on its own
-schedule. When a provider lacks credentials it returns empty data
-(`{"note": "TIINGO_API_KEY not set", "source": "none"}`) — never an
-exception, never a stub leaking into output.
+schedule. When a source lacks credentials it returns empty data with a
+``note`` — never an exception, never a stub leaking into output.
 
 ---
 
@@ -310,11 +313,11 @@ calorch/
 │   ├── templates.py                  # Template engine — JSON → EventAnalysis
 │   ├── llm.py / llm_enrich.py        # LLM factory + enrichment with thinking-block filter
 │   ├── providers.py                  # Protocol-based live data layer
-│   ├── data_ingestion.py             # Blob ingestion pipeline (SEC/FRED/Tiingo → calorch-inputs)
+│   ├── data_ingestion.py             # Blob ingestion pipeline (SEC + AlphaSense → calorch-inputs)
 │   ├── blob_store.py                 # Azure Blob Storage (inputs/outputs) + local fallback
 │   ├── tools.py                      # GraphClient, OneDrive, Repository, make_providers
 │   ├── sec.py / sec_ixbrl.py / sec_efts.py  # SEC EDGAR clients
-│   ├── fred.py / fed_h15.py / tiingo.py     # Macro + price clients
+│   ├── alphasense.py                 # AlphaSense client (guidance/transcripts/sentiment)
 │   └── cli.py                        # `calorch run / summary / serve` (serve = langgraph dev)
 ├── tests/                            # tests (test_durable, test_agents, test_graph, …)
 ├── docs/
@@ -385,8 +388,8 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `OUTPUT_DIR` / `SEC_CACHE_DIR` / `AUDIT_LOG_PATH` | Yes (Azure) | Point at `/tmp/...` — the package mount is read-only |
 | `SEC_USER_AGENT` | Yes (prod) | `"Your Name you@example.com"` — SEC requires a real contact |
 | `SEC_WATCHLIST` | No | Ingestion tickers (default 10 mega-caps) |
-| `TIINGO_API_KEY` / `FRED_API_KEY` | No | Prices/consensus; macro |
-| `USE_FRED` / `USE_FED_H15` / `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` | No | Toggle free sources (default `true`) |
+| `ALPHASENSE_API_KEY` (+ `_CLIENT_ID`/`_CLIENT_SECRET`/`_USERNAME`/`_PASSWORD`) | No | AlphaSense guidance/transcripts/sentiment; empty disables (degrades to empty) |
+| `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` / `USE_ALPHASENSE` | No | Toggle data sources (default `true`) |
 | `USE_MOCKS` | No | `true` = MockChatModel + seed events (default `true`) |
 | `CALORCH_AGENT_MODULES` | No | Comma-separated import paths of out-of-tree agent modules |
 | `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` / `LANGSMITH_TRACING` | No | LangSmith tracing of agent subgraphs |
@@ -402,7 +405,7 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `conference` | `conference.json` | Company overview, key questions for 1x1s, risk factors | Fundamentals + macro |
 | `kol_meeting` | `kol_meeting.json` | Pre-call research, hypotheses | N/A (people-based) |
 | `channel_check` | `channel_check.json` | Revenue overview, questionnaire (15-20 Q), risk factors | Fundamentals + EFTS |
-| `portfolio_meeting` | `portfolio_meeting.json` | Key movers, discussion items | FRED + H.15 (macro) |
+| `portfolio_meeting` | `portfolio_meeting.json` | Key movers, discussion items | SEC fundamentals + AlphaSense sentiment |
 | `internal_review` | `internal_review.json` | Performance review, key questions, risk factors | N/A |
 | `analyst_meeting` | `analyst_meeting.json` | Executive summary, key questions, risk factors | Fundamentals |
 
@@ -458,14 +461,14 @@ Azure Durable Functions on **Flex Consumption** (scale-to-zero, per-execution bi
 | Function App (Flex Consumption) | ~$0 idle + pennies/run |
 | Storage account (task hub + artifacts) | <$1.00 |
 | Azure OpenAI (~100 calls/week) | ~$8–20 (token-driven) |
-| SEC EDGAR + FRED + FOMC H.15 (unlimited, fair-use) | Free |
-| Tiingo EOD (optional) | $50.00 |
+| SEC EDGAR (unlimited, fair-use) | Free |
+| AlphaSense (licensed) | per contract |
 | Azure Table Storage (delivery idempotency) | ~$0 (cents) |
 | Azure AI Search (optional — institutional-knowledge RAG) | $0 Free tier / ~$75 Basic |
 | Azure Key Vault | ~$1.00 |
 | Application Insights + Log Analytics | ~$5.00 |
-| **Total (without Tiingo)** | **~$15–28/mo** |
-| **Total (with Tiingo)** | **~$65–78/mo** |
+| **Total (excl. AlphaSense)** | **~$15–28/mo** |
+
 
 The approval pause costs nothing — state waits in the task hub, not on a running instance.
 
@@ -528,9 +531,7 @@ Every generated report includes a Data Sources table showing provenance:
 | SEC iXBRL Fundamentals | ACTIVE | Revenue, EPS, margins, balance sheet, cash flow |
 | SEC iXBRL | ACTIVE | Company facts + segment revenue |
 | SEC EFTS | ACTIVE | Full-text filing search |
-| FRED | ACTIVE | Federal Reserve Economic Data |
-| FOMC H.15 | ACTIVE | US Treasury / Fed rates |
-| Tiingo | MISSING | TIINGO_API_KEY not set |
+| AlphaSense | ACTIVE | Guidance, transcripts/expert calls, sentiment |
 
 ---
 

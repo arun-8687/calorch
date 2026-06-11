@@ -1,7 +1,7 @@
 """Azure Blob Storage integration for input and output persistence.
 
 Two blob categories:
-  * **inputs/**  — raw provider responses (SEC, FRED, Tiingo, etc.)
+  * **inputs/**  — raw provider responses (SEC EDGAR, AlphaSense)
   * **outputs/** — generated artefacts (DOCX, HTML, briefings)
 
 Path conventions:

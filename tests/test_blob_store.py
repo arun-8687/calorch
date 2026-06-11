@@ -61,12 +61,12 @@ class TestLocalBlobStore:
 
     def test_upload_and_download_json(self, tmp_path):
         store = LocalBlobStore(tmp_path / "blobs")
-        url = store.upload_json("inputs", "fred/macro.json",
-                                {"vix": 18.5}, metadata={"source": "fred"})
+        url = store.upload_json("inputs", "sentiment/AAPL.json",
+                                {"mean_sentiment": 0.2}, metadata={"source": "alphasense"})
         assert url != ""
-        data = store.download_json("inputs", "fred/macro.json")
+        data = store.download_json("inputs", "sentiment/AAPL.json")
         assert data is not None
-        assert data["vix"] == 18.5
+        assert data["mean_sentiment"] == 0.2
 
     def test_upload_file(self, tmp_path):
         store = LocalBlobStore(tmp_path / "blobs")

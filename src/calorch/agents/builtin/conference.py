@@ -6,10 +6,10 @@ from typing import Any
 from calorch.agents.base import AgentSpec, register
 from calorch.analysis import (
     EventAnalysis,
-    add_macro_table_to,
+    add_sentiment_table_to,
     base_analysis,
     build_with_template,
-    enrich_macro,
+    enrich_sentiment,
     resolve_primary_ticker_and_cik,
     ticker_context,
 )
@@ -21,10 +21,9 @@ def build_conference(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) 
     tickers = a_base.tickers or ["AAPL", "MSFT", "NVDA"]
     primary_ticker = tickers[0]
     _, cik = resolve_primary_ticker_and_cik(a_base, cik_lookup)
-    macro = enrich_macro(providers)
 
     data_tables: dict[str, Any] = {}
-    add_macro_table_to(data_tables, macro)
+    add_sentiment_table_to(data_tables, enrich_sentiment(providers, primary_ticker))
 
     ctx = ticker_context(
         ticker=primary_ticker,

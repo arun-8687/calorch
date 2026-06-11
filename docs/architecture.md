@@ -45,7 +45,7 @@ flowchart TB
 
     subgraph EXTERNAL["External services"]
         M365["Microsoft 365<br/>Graph · Outlook · OneDrive"]
-        SEC["SEC EDGAR · FRED · FOMC H.15 · Tiingo"]
+        SEC["SEC EDGAR · AlphaSense"]
         OPENAI["Azure OpenAI<br/>classify + enrich"]
     end
 
@@ -155,9 +155,9 @@ flowchart TB
             M2["Graph · sendMail / createDraft"]:::external
             M3["OneDrive · DOCX archive"]:::external
         end
-        subgraph T3B["Free data (data.sec.gov, FRED, FOMC)"]
+        subgraph T3B["Data sources (data.sec.gov, AlphaSense)"]
             S1["SEC submissions + companyfacts"]:::external
-            S2["FRED + FOMC H.15 macro"]:::external
+            S2["AlphaSense narrative + sentiment"]:::external
         end
         OAI["Azure OpenAI<br/>classify + enrich"]:::external
     end
@@ -186,7 +186,7 @@ flowchart TB
     N2 -->|HTTPS| OAI
     W1 & W2 & WN -->|read pre-ingested| BLOB
     W1 & W2 & WN -.->|fallback| S1
-    W1 & W2 & WN -.->|macro| S2
+    W1 & W2 & WN -.->|narrative/sentiment| S2
     W1 & W2 & WN -->|enrich| OAI
     W1 & W2 & WN -->|upload| M3
     DELIVER -->|HTTPS| M2
@@ -286,7 +286,7 @@ flowchart LR
     end
 
     subgraph DATA["Free data"]
-        EDGAR["data.sec.gov · FRED · FOMC"]
+        EDGAR["data.sec.gov · AlphaSense"]
     end
 
     ID -.->|Storage Blob Data Contributor| STG
@@ -421,28 +421,31 @@ The same pipeline is also assembled as a LangGraph `StateGraph`
 the same nodes and agent registry, so behaviour is identical to the
 activity path.
 
-For the enterprise-grade data-source strategy (Refinitiv / FactSet / Tiingo
-/ FRED / SEC), see `docs/evaluations/enterprise-data-sources.md`. For a
+For the historical data-source strategy evaluation, see
+`docs/evaluations/enterprise-data-sources.md`. For a
 per-field gap analysis, see `docs/evaluations/sec-edgar-coverage.md`.
 
 ## Data source layer
 
-The orchestrator is wired against a `ProviderBundle` of free, official
-sources plus stubs for fields that require a paid terminal. In production
-agents read **pre-ingested** data from `calorch-inputs`
-(`USE_BLOB_PROVIDERS=true`); `calorch.data_ingestion` populates it on a
-separate schedule.
+The orchestrator is wired against a `ProviderBundle` backed by exactly two
+sources — **SEC EDGAR** (structured numbers) and **AlphaSense**
+(qualitative). In production agents read **pre-ingested** data from
+`calorch-inputs` (`USE_BLOB_PROVIDERS=true`); `calorch.data_ingestion`
+populates it on a separate schedule.
 
-| Provider | Real impl | Stub | Triggered by env var |
+| Provider slot | Source | Client | Triggered by env var |
 |---|---|---|---|
-| Macro (VIX, 10Y, oil, …) | FRED + FOMC H.15 | `StubFredClient` + `StubFedH15Client` | `FRED_API_KEY`, `USE_FRED`, `USE_FED_H15` |
-| Segments (product/geo) | `SecIxbrlClient` (real parser) | `StubIxbrlClient` | `USE_IXBRL_SEGMENTS` |
-| Narrative (guidance) | `SecEftsClient` (real search) | `StubEftsClient` | `USE_SEC_EFTS` |
-| Price (52w, market cap) | Tiingo | `StubPriceProvider` | `TIINGO_API_KEY` |
-| Consensus (EPS est, target) | Tiingo | `StubConsensusProvider` | `TIINGO_API_KEY` |
+| `fundamentals` | SEC iXBRL company facts | `SecIxbrlClient` | `USE_IXBRL_SEGMENTS` |
+| `segments` (product/geo) | SEC iXBRL | `SecIxbrlClient` | `USE_IXBRL_SEGMENTS` |
+| `filings` (guidance) | SEC EFTS full-text search | `SecEftsClient` | `USE_SEC_EFTS` |
+| `narrative` (guidance/outlook) | AlphaSense | `AlphaSenseClient` | `ALPHASENSE_API_KEY` |
+| `transcripts` (earnings/expert) | AlphaSense | `AlphaSenseClient` | `ALPHASENSE_API_KEY` |
+| `sentiment` (-1..1) | AlphaSense | `AlphaSenseClient` | `ALPHASENSE_API_KEY` |
 
-The dispatcher in `src/calorch/providers.py` reads `Settings` and returns
-the right implementation. The renderer never knows which one is wired.
+There is no price, consensus or macro provider (those needed Tiingo / FRED
+/ FOMC H.15, now out of scope); those fields render as "—". The dispatcher
+in `src/calorch/providers.py` reads `Settings` and returns the right
+implementation; the renderer never knows which one is wired.
 
 ---
 

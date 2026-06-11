@@ -64,26 +64,27 @@ class Settings:
     approver_emails: list[str]
     approval_base_url: str | None  # override link base (default WEBSITE_HOSTNAME)
 
-    factset_api_key: str | None
-    bloomberg_blpapi_host: str | None
-    lseg_client_id: str | None
-    spglobal_api_key: str | None
-    tiingo_api_key: str | None
+    # LLM (OpenAI-compatible alt)
     opencode_go_api_key: str | None
     opencode_go_model: str
 
-    # Free data sources
-    fred_api_key: str | None
-    use_fred: bool
-    use_ixbrl_segments: bool
-    use_sec_efts: bool
-    use_fed_h15: bool
-
-    # SEC EDGAR
+    # ---- Data sources: SEC EDGAR + AlphaSense only ----
+    # SEC EDGAR (fundamentals, segments, filing full-text)
     sec_user_agent: str
     sec_cache_dir: Path
     sec_watchlist: list[str]
     sec_forms: list[str] | None
+    use_ixbrl_segments: bool
+    use_sec_efts: bool
+
+    # AlphaSense (qualitative: guidance, transcripts/expert calls, sentiment)
+    alphasense_api_key: str | None
+    alphasense_client_id: str | None
+    alphasense_client_secret: str | None
+    alphasense_username: str | None
+    alphasense_password: str | None
+    alphasense_base_url: str
+    use_alphasense: bool
 
     use_mocks: bool
     output_dir: Path
@@ -125,22 +126,21 @@ def get_settings() -> Settings:
         knowledge_writeback=_bool("KNOWLEDGE_WRITEBACK", True),
         approver_emails=_csv("APPROVER_EMAILS", ""),
         approval_base_url=_env("APPROVAL_BASE_URL"),
-        factset_api_key=_env("FACTSET_API_KEY"),
-        bloomberg_blpapi_host=_env("BLOOMBERG_BLPAPI_HOST"),
-        lseg_client_id=_env("LSEG_CLIENT_ID"),
-        spglobal_api_key=_env("SPGLOBAL_API_KEY"),
-        tiingo_api_key=_env("TIINGO_API_KEY"),
         opencode_go_api_key=_env("OPENCODE_GO_API_KEY"),
         opencode_go_model=_env("OPENCODE_GO_MODEL", "glm-5.1") or "glm-5.1",
-        fred_api_key=_env("FRED_API_KEY"),
-        use_fred=_bool("USE_FRED", True),
-        use_ixbrl_segments=_bool("USE_IXBRL_SEGMENTS", True),
-        use_sec_efts=_bool("USE_SEC_EFTS", True),
-        use_fed_h15=_bool("USE_FED_H15", True),
         sec_user_agent=_env("SEC_USER_AGENT", "Calorch Research calorch@example.com") or "Calorch Research calorch@example.com",
         sec_cache_dir=Path(_env("SEC_CACHE_DIR", "./.cache/sec") or "./.cache/sec"),
         sec_watchlist=_csv("SEC_WATCHLIST", "AAPL,MSFT,NVDA,GOOGL,AMZN,META,AVGO,JPM,TSLA,WMT"),
         sec_forms=_csv("SEC_FORMS", None) or None,
+        use_ixbrl_segments=_bool("USE_IXBRL_SEGMENTS", True),
+        use_sec_efts=_bool("USE_SEC_EFTS", True),
+        alphasense_api_key=_env("ALPHASENSE_API_KEY"),
+        alphasense_client_id=_env("ALPHASENSE_CLIENT_ID"),
+        alphasense_client_secret=_env("ALPHASENSE_CLIENT_SECRET"),
+        alphasense_username=_env("ALPHASENSE_USERNAME"),
+        alphasense_password=_env("ALPHASENSE_PASSWORD"),
+        alphasense_base_url=_env("ALPHASENSE_BASE_URL", "https://api.alpha-sense.com") or "https://api.alpha-sense.com",
+        use_alphasense=_bool("USE_ALPHASENSE", True),
         use_mocks=_bool("USE_MOCKS", True),
         output_dir=Path(_env("OUTPUT_DIR", "./out") or "./out"),
         langsmith_api_key=_env("LANGSMITH_API_KEY"),

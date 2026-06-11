@@ -112,23 +112,8 @@ def resolve_primary_ticker_and_cik(
 
 
 # ---------------------------------------------------------------------------
-# Free-source enrichment: macro box, segment table, guidance excerpts
+# Enrichment: SEC segments/filings + AlphaSense guidance/transcripts/sentiment
 # ---------------------------------------------------------------------------
-def enrich_macro(providers: Any) -> dict[str, dict[str, Any]] | None:
-    """Return the FRED/H.15 macro snapshot for the brief, or None on failure."""
-    if providers is None or getattr(providers, "macro", None) is None:
-        return None
-    try:
-        snap = providers.macro.snapshot()
-    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
-        log.warning("Macro snapshot failed: %s", e)
-        return None
-    except (KeyError, TypeError, ValueError) as e:
-        log.warning("Macro snapshot returned malformed data: %s", e)
-        return None
-    return snap or None
-
-
 def enrich_segments(providers: Any, cik: str | None, ticker: str | None) -> list[dict[str, Any]] | None:
     if providers is None or not ticker or not cik:
         return None
@@ -156,10 +141,11 @@ def enrich_geo(providers: Any, cik: str | None, ticker: str | None) -> list[dict
 
 
 def enrich_guidance(providers: Any, cik: str | None, ticker: str | None) -> list[dict[str, Any]] | None:
-    if providers is None or not ticker or not cik:
+    """AlphaSense guidance/outlook excerpts (cik accepted for call-site symmetry)."""
+    if providers is None or not ticker:
         return None
     try:
-        return providers.narrative.guidance_hits(cik, ticker, limit=5)
+        return providers.narrative.guidance_hits(cik or "", ticker, limit=5)
     except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
         log.warning("Guidance fetch failed for %s: %s", ticker, e)
         return None
@@ -168,64 +154,54 @@ def enrich_guidance(providers: Any, cik: str | None, ticker: str | None) -> list
         return None
 
 
+def enrich_filings(providers: Any, cik: str | None, ticker: str | None) -> list[dict[str, Any]] | None:
+    """SEC EFTS filing-guidance excerpts for the brief."""
+    if providers is None or not ticker or not cik:
+        return None
+    try:
+        return providers.filings.guidance_hits(cik, ticker, limit=5)
+    except (httpx.HTTPError, ConnectionError, TimeoutError, KeyError, TypeError, ValueError) as e:
+        log.warning("Filings fetch failed for %s: %s", ticker, e)
+        return None
+
+
+def enrich_transcripts(providers: Any, ticker: str | None) -> list[dict[str, Any]] | None:
+    """AlphaSense transcript / expert-call matches for the brief."""
+    if providers is None or not ticker:
+        return None
+    try:
+        return providers.transcripts.transcript_hits(ticker, limit=5)
+    except (httpx.HTTPError, ConnectionError, TimeoutError, KeyError, TypeError, ValueError) as e:
+        log.warning("Transcript fetch failed for %s: %s", ticker, e)
+        return None
+
+
+def enrich_sentiment(providers: Any, ticker: str | None) -> dict[str, Any] | None:
+    """AlphaSense aggregate sentiment for the brief, or None when unavailable."""
+    if providers is None or not ticker:
+        return None
+    try:
+        snap = providers.sentiment.sentiment(ticker)
+    except (httpx.HTTPError, ConnectionError, TimeoutError, KeyError, TypeError, ValueError) as e:
+        log.warning("Sentiment fetch failed for %s: %s", ticker, e)
+        return None
+    return snap if snap and snap.get("mean_sentiment") is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Table helpers
 # ---------------------------------------------------------------------------
-def add_macro_table_to(data_tables: dict[str, Any], macro: dict[str, Any] | None) -> None:
-    """Insert a macro data table if the snapshot is non-empty."""
-    if macro:
-        data_tables["macro"] = {
-            "headers": ["Macro indicator", "Value", "1W Δ", "As of"],
-            "rows": macro_table(macro),
+def add_sentiment_table_to(data_tables: dict[str, Any], sentiment: dict[str, Any] | None) -> None:
+    """Insert an AlphaSense sentiment table if a score is available."""
+    if sentiment and sentiment.get("mean_sentiment") is not None:
+        data_tables["sentiment"] = {
+            "headers": ["AlphaSense sentiment", "Value"],
+            "rows": [
+                ["Mean sentiment (-1..1)", f"{sentiment['mean_sentiment']:+.2f}"],
+                ["Label", str(sentiment.get("label", "—")).title()],
+                ["Documents sampled", str(sentiment.get("sample", "—"))],
+            ],
         }
-
-
-def macro_table(snap: dict[str, dict[str, Any]] | None) -> list[list[str]]:
-    """Return rows ``[label, value, 1W, date]`` for the macro box."""
-    if not snap:
-        return [["Macro context unavailable", "—", "—", "—"]]
-    label_map = {
-        "vix": "VIX",
-        "sp500": "S&P 500",
-        "treasury_1mo": "1M UST",
-        "treasury_3mo": "3M UST",
-        "treasury_6mo": "6M UST",
-        "treasury_1y": "1Y UST",
-        "treasury_2y": "2Y UST",
-        "treasury_3y": "3Y UST",
-        "treasury_5y": "5Y UST",
-        "treasury_7y": "7Y UST",
-        "treasury_10y": "10Y UST",
-        "treasury_20y": "20Y UST",
-        "treasury_30y": "30Y UST",
-        "fed_funds": "Fed Funds",
-        "wti_oil": "WTI Oil",
-        "gold": "Gold",
-        "btc_usd": "BTC/USD",
-        "usd_eur": "USD/EUR",
-        "cpi": "CPI",
-        "unemployment": "Unemployment",
-    }
-    rows: list[list[str]] = []
-    seen: set[str] = set()
-    for k, entry in snap.items():
-        label = label_map.get(k, k)
-        if label in seen:
-            continue
-        seen.add(label)
-        val = entry.get("value")
-        val_str = f"{val:,.2f}" if isinstance(val, (int, float)) else "—"
-        change = entry.get("change_1w")
-        if change is None:
-            change = entry.get("change_1w_bps")
-        if isinstance(change, (int, float)) and abs(change) < 50 and entry.get("change_1w") is not None:
-            change_str = f"{change:+.2f}%"
-        elif isinstance(change, (int, float)) and entry.get("change_1w_bps") is not None:
-            change_str = f"{change:+.0f}bps"
-        else:
-            change_str = "—"
-        rows.append([label, val_str, change_str, entry.get("date", "—")])
-    return rows
 
 
 def segment_table_rows(seg: list[dict[str, Any]] | None) -> list[list[str]]:
@@ -260,23 +236,14 @@ def ticker_context(
     event_date: str = "",
     cik: str = "",
 ) -> dict[str, Any]:
-    """Build a template context dict from live provider data for one ticker.
+    """Build a template context dict for one ticker from SEC fundamentals.
 
-    Priority: SEC iXBRL fundamentals > Tiingo consensus > empty ("—").
-    Returns formatted strings ready for template variable substitution.
+    Financial figures come from SEC iXBRL company facts. Market-data fields
+    (price, valuation multiples, analyst consensus) have no SEC/AlphaSense
+    source and render as "—"; the qualitative side is supplied separately by
+    the AlphaSense narrative/transcript/sentiment helpers.
     """
-    price_data = providers.price.quote(ticker) if providers else None
-    consensus = providers.consensus.estimates(ticker) if providers else None
-    recs = providers.consensus.recommendations(ticker) if providers else None
-    consensus = dict(consensus or {})
-    if recs:
-        consensus.update(recs)
-    if price_data:
-        consensus.setdefault("price", price_data.get("price"))
-        consensus.setdefault("market_cap", price_data.get("market_cap"))
-
-    # SEC iXBRL fundamentals — primary source for financial data
-    funds = {}
+    funds: dict[str, Any] = {}
     if providers and cik:
         try:
             funds = providers.fundamentals.latest_fundamentals(cik, ticker) or {}
@@ -285,13 +252,11 @@ def ticker_context(
         except httpx.HTTPError as e:
             log.warning("SEC iXBRL fetch failed for %s: %s", ticker, e)
 
-    p = price_data or {}
-    c = consensus
     f = funds
 
     def _get(*keys: str, fmt_fn=None):
         for k in keys:
-            v = f.get(k) or c.get(k)
+            v = f.get(k)
             if v is not None:
                 return fmt_fn(v) if fmt_fn else v
         return "—"
@@ -299,15 +264,27 @@ def ticker_context(
     return {
         "event_id": event_id,
         "primary_ticker": ticker,
-        "company_name": f.get("company_name") or c.get("company", ticker),
-        "price": fmt_price(p.get("price")),
-        "market_cap": fmt_b(p.get("market_cap")),
-        "sector": p.get("sector") or "Technology",
-        "ceo_name": p.get("ceo_name") or "—",
-        "employees": str(p.get("employees") or "—"),
-        "consensus_rating": str(c.get("consensus_rating", _get("consensus_rating") or "—")),
-        "mean_target": fmt_price(c.get("mean_target")),
+        "company_name": f.get("company_name") or f.get("company") or ticker,
+        # ---- market data: no SEC/AlphaSense source ----
+        "price": "—",
+        "market_cap": "—",
+        "sector": "—",
+        "ceo_name": "—",
+        "employees": "—",
+        "consensus_rating": "—",
+        "mean_target": "—",
         "upside_pct": "—",
+        "pe_ttm": "—",
+        "forward_pe": "—",
+        "ev_ebitda": "—",
+        "price_sales": "—",
+        "price_book": "—",
+        "buy": "—", "hold": "—", "sell": "—",
+        "buy_pct": "—", "hold_pct": "—", "sell_pct": "—",
+        "num_analysts": "—",
+        "change_1w": "—", "change_1m": "—", "change_ytd": "—",
+        "range_52w": "—",
+        # ---- SEC iXBRL fundamentals ----
         "last_quarter_label": "Q1 FY2026",
         "rev_actual": _get("revenue", fmt_fn=fmt_b),
         "eps_actual": _get("eps_diluted", fmt_fn=fmt_price),
@@ -318,27 +295,11 @@ def ticker_context(
         "net_margin": _get("net_margin", fmt_fn=fmt_pct),
         "roe": _get("roe", fmt_fn=fmt_pct),
         "roa": _get("roa", fmt_fn=fmt_pct),
-        "pe_ttm": fmt_x(c.get("pe_ttm")),
-        "forward_pe": fmt_x(c.get("forward_pe")),
-        "ev_ebitda": fmt_x(c.get("ev_ebitda")),
-        "price_sales": fmt_x(c.get("price_sales")),
-        "price_book": fmt_x(c.get("price_book")),
         "cash": _get("cash", fmt_fn=fmt_b),
         "total_debt": _get("long_term_debt", fmt_fn=fmt_b),
         "net_debt": _get("net_debt", fmt_fn=fmt_b),
         "debt_equity": _get("debt_equity", fmt_fn=fmt_x),
         "current_ratio": _get("current_ratio", fmt_fn=lambda v: f"{v:.2f}"),
-        "buy": str(c.get("buy", "—")),
-        "hold": str(c.get("hold", "—")),
-        "sell": str(c.get("sell", "—")),
-        "buy_pct": str(c.get("buy_pct", "—")),
-        "hold_pct": str(c.get("hold_pct", "—")),
-        "sell_pct": str(c.get("sell_pct", "—")),
-        "num_analysts": str(c.get("num_analysts", "—")),
-        "change_1w": f"{p.get('change_1w', 0):+.1f}%" if p.get('change_1w') is not None else "—",
-        "change_1m": f"{p.get('change_1m', 0):+.1f}%" if p.get('change_1m') is not None else "—",
-        "change_ytd": f"{p.get('ytd_pct', 0):+.1f}%" if p.get('ytd_pct') is not None else "—",
-        "range_52w": f"{fmt_price(p.get('52w_low'))} — {fmt_price(p.get('52w_high'))}",
         "event_date": event_date,
         "event_time": "09:00 AM IST",
         "conference_name": event_subject,
@@ -397,7 +358,7 @@ def build_analysis(
     type's analysis logic is declared in exactly one place — its module
     under :mod:`calorch.agents.builtin`. ``providers`` is the calorch
     ``ProviderBundle``; builders that accept it pull real macro context
-    (FRED/H.15), segment splits (SEC iXBRL) and guidance (SEC EFTS).
+    segment splits (SEC iXBRL) and qualitative context (AlphaSense).
     """
     from calorch.agents import get_agent
 
