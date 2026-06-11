@@ -37,6 +37,10 @@ _BLOB_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 # ---------------------------------------------------------------------------
 @runtime_checkable
 class BlobStore(Protocol):
+    # Configured container names so callers never hardcode literals.
+    input_container: str
+    output_container: str
+
     def upload_bytes(
         self,
         container: str,
@@ -133,6 +137,8 @@ class AzureBlobStore:
                 "for AzureBlobStore."
             )
 
+        self.input_container = input_container
+        self.output_container = output_container
         self._input_container = input_container
         self._output_container = output_container
         self._containers_cache: set[str] = set()
@@ -274,9 +280,17 @@ class LocalBlobStore:
     Layout:  ``<root>/<container>/<blob_name>``
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        input_container: str = "calorch-inputs",
+        output_container: str = "calorch-outputs",
+    ) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
+        self.input_container = input_container
+        self.output_container = output_container
 
     def _path(self, container: str, blob_name: str) -> Path:
         p = self._root / container / blob_name
@@ -379,6 +393,9 @@ class NullBlobStore:
     all downloads return None, all existence checks return False.
     """
 
+    input_container = "calorch-inputs"
+    output_container = "calorch-outputs"
+
     def upload_bytes(self, container, blob_name, data, *, content_type="application/octet-stream", metadata=None, overwrite=True) -> str:
         log.debug("null blob store: upload_bytes %s/%s (%d bytes) skipped", container, blob_name, len(data))
         return ""
@@ -454,6 +471,8 @@ def make_blob_store(
     connection_string: str | None = None,
     account_url: str | None = None,
     local_root: Path | None = None,
+    input_container: str = "calorch-inputs",
+    output_container: str = "calorch-outputs",
 ) -> BlobStore:
     """Create the appropriate BlobStore based on configuration.
 
@@ -463,10 +482,11 @@ def make_blob_store(
       3. ``local_root`` → LocalBlobStore (dev/testing)
       4. Otherwise → NullBlobStore
     """
+    containers = {"input_container": input_container, "output_container": output_container}
     if connection_string:
-        return AzureBlobStore(connection_string=connection_string)
+        return AzureBlobStore(connection_string=connection_string, **containers)
     if account_url:
-        return AzureBlobStore(account_url=account_url)
+        return AzureBlobStore(account_url=account_url, **containers)
     if local_root:
-        return LocalBlobStore(local_root)
+        return LocalBlobStore(local_root, **containers)
     return NullBlobStore()

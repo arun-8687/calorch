@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timedelta, UTC
 from typing import Any
 
@@ -32,6 +33,14 @@ import azure.durable_functions as df
 import azure.functions as func
 
 bp = df.Blueprint()
+
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _bad_request(message: str) -> func.HttpResponse:
+    return func.HttpResponse(
+        json.dumps({"error": message}), status_code=400, mimetype="application/json"
+    )
 
 # Transient-failure retry for activities (Graph/LLM/SEC calls inside).
 # Mirrors the RetryPolicy(max_attempts=3) the pure-LangGraph graph used.
@@ -224,6 +233,16 @@ async def http_start(req: func.HttpRequest, client):
         body = {}
 
     run_id = body.get("run_id") or datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+    if not _RUN_ID_RE.match(run_id):
+        return _bad_request("run_id must match [A-Za-z0-9_-]{1,64}")
+    # Validate ISO-8601 window bounds when supplied (None → orchestrator default).
+    for field in ("start", "end"):
+        val = body.get(field)
+        if val is not None:
+            try:
+                datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+            except ValueError:
+                return _bad_request(f"{field} must be ISO-8601")
     instance_id = await client.start_new(
         "calorch_orchestrator",
         instance_id=run_id,
@@ -254,6 +273,15 @@ async def http_approval(req: func.HttpRequest, client):
     except ValueError:
         body = {}
 
+    # Reject unknown instances rather than silently accepting a no-op event.
+    status = await client.get_status(instance_id)
+    if status is None or status.runtime_status is None:
+        return func.HttpResponse(
+            json.dumps({"error": f"instance {instance_id} not found"}),
+            status_code=404,
+            mimetype="application/json",
+        )
+
     approved = bool(body.get("approved", False))
     await client.raise_event(instance_id, event_name="approval", event_data={"approved": approved})
     return func.HttpResponse(
@@ -281,22 +309,31 @@ async def http_status(req: func.HttpRequest, client):
             mimetype="application/json",
         )
     return func.HttpResponse(
-        json.dumps(
-            {
-                "instance_id": status.instance_id,
-                "runtime_status": status.runtime_status.name,
-                "created_time": status.created_time.isoformat() if status.created_time else None,
-                "last_updated_time": status.last_updated_time.isoformat()
-                if status.last_updated_time
-                else None,
-                "input": status.input_,
-                "output": status.output,
-            },
-            default=str,
-        ),
+        json.dumps(_status_payload(status), default=str),
         status_code=200,
         mimetype="application/json",
     )
+
+
+def _status_payload(status: Any) -> dict[str, Any]:
+    """Project a DurableOrchestrationStatus to a non-sensitive response body.
+
+    The full output contains ``errors`` (exception reprs that can embed event
+    text/PII) and ``log``; expose counts, never bodies, and never the input.
+    """
+    out = status.output if isinstance(status.output, dict) else {}
+    return {
+        "instance_id": status.instance_id,
+        "runtime_status": status.runtime_status.name,
+        "created_time": status.created_time.isoformat() if status.created_time else None,
+        "last_updated_time": status.last_updated_time.isoformat()
+        if status.last_updated_time
+        else None,
+        "event_count": out.get("event_count"),
+        "approval_status": out.get("approval_status"),
+        "error_count": len(out.get("errors", []) or []),
+        "followup_count": out.get("followup_count"),
+    }
 
 
 def get_blueprint() -> df.Blueprint:

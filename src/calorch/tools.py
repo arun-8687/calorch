@@ -104,6 +104,9 @@ class _GraphClientReal:
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Call Graph with bounded retries for throttling and transient failures."""
         base_headers = kwargs.pop("headers", {})
+        # Stable per-logical-request id so a retried POST (e.g. createDraft) can
+        # be deduplicated server-side rather than creating a duplicate.
+        base_headers.setdefault("client-request-id", str(uuid.uuid4()))
         last_error: Exception | None = None
         for attempt in range(4):
             headers = {**self._headers(), **base_headers}
@@ -116,6 +119,8 @@ class _GraphClientReal:
                 time.sleep(min(2**attempt, 8))
                 continue
             if response.status_code == 401 and attempt < 3:
+                # Benign even without the token lock: a concurrent refresh just
+                # re-acquires; worst case is one extra token fetch.
                 self._token = None
                 continue
             if response.status_code in {429, 500, 502, 503, 504} and attempt < 3:
@@ -467,12 +472,13 @@ class TableRepository:
         account_url: str | None = None,
     ) -> None:
         try:
-            from azure.data.tables import TableClient
+            from azure.data.tables import TableClient, UpdateMode
         except ImportError as exc:  # pragma: no cover - exercised in deployed image
             raise OrchestratorError(
                 "REPO_BACKEND=table requires the `azure-data-tables` package "
                 "(pip install calorch[azure])."
             ) from exc
+        self._update_mode = UpdateMode.REPLACE
 
         if connection_string:
             self._table = TableClient.from_connection_string(connection_string, table_name=table_name)
@@ -493,6 +499,8 @@ class TableRepository:
             pass
 
     def upsert(self, event_id: str, doc: dict[str, Any]) -> None:
+        # Read-merge-replace is safe here because each event_id is written by
+        # exactly one delivery activity (no concurrent writers to a key).
         existing = self.get(event_id) or {}
         merged = {**existing, **doc, "event_id": event_id, "updated_at": _now().isoformat()}
         entity = {
@@ -500,9 +508,7 @@ class TableRepository:
             "RowKey": self._ROW_KEY,
             "_doc": json.dumps(merged, default=str),
         }
-        from azure.data.tables import UpdateMode
-
-        self._table.upsert_entity(entity, mode=UpdateMode.REPLACE)
+        self._table.upsert_entity(entity, mode=self._update_mode)
 
     def get(self, event_id: str) -> dict[str, Any] | None:
         try:

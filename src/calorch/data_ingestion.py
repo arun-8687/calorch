@@ -29,7 +29,6 @@ from calorch.config import get_settings
 
 log = logging.getLogger("calorch.data_ingestion")
 
-_INPUT_CONTAINER = "calorch-inputs"
 
 
 def _today() -> str:
@@ -66,6 +65,8 @@ class IngestionPipeline:
             connection_string=get_settings().azure_storage_connection_string,
             account_url=get_settings().azure_storage_account_url,
             local_root=get_settings().blob_local_root,
+            input_container=get_settings().blob_input_container,
+            output_container=get_settings().blob_output_container,
         )
         self._date = date or _today()
         self._s = get_settings()
@@ -104,7 +105,7 @@ class IngestionPipeline:
 
         # Store in blob
         path = _blob_path("macro", date=self._date)
-        self._blob.upload_json(_INPUT_CONTAINER, path, snap, metadata={"date": self._date, "sources": "fred,h15"})
+        self._blob.upload_json(self._blob.input_container, path, snap, metadata={"date": self._date, "sources": "fred,h15"})
         return {"status": "ok", "date": self._date, "path": path, "errors": errors, "log": self._log[-2:]}
 
     # -- Price: Tiingo ----------------------------------------------------
@@ -125,11 +126,11 @@ class IngestionPipeline:
 
         # Store quote
         path = _blob_path("price", ticker=ticker, date=self._date)
-        self._blob.upload_json(_INPUT_CONTAINER, path, quote, metadata={"ticker": ticker, "date": self._date})
+        self._blob.upload_json(self._blob.input_container, path, quote, metadata={"ticker": ticker, "date": self._date})
 
         # Store OHLCV
         ohlcv_path = f"inputs/price/{ticker}/{self._date}_ohlcv.json"
-        self._blob.upload_json(_INPUT_CONTAINER, ohlcv_path, ohlcv, metadata={"ticker": ticker, "date": self._date})
+        self._blob.upload_json(self._blob.input_container, ohlcv_path, ohlcv, metadata={"ticker": ticker, "date": self._date})
 
         self._log.append(f"Tiingo price {ticker} ingested")
         return {"status": "ok", "ticker": ticker, "path": path, "ohlcv_path": ohlcv_path}
@@ -150,7 +151,7 @@ class IngestionPipeline:
             return {"status": "error", "ticker": ticker, "error": str(e)}
 
         path = _blob_path("consensus", ticker=ticker, date=self._date)
-        self._blob.upload_json(_INPUT_CONTAINER, path, estimates, metadata={"ticker": ticker, "date": self._date})
+        self._blob.upload_json(self._blob.input_container, path, estimates, metadata={"ticker": ticker, "date": self._date})
 
         self._log.append(f"Tiingo consensus {ticker} ingested")
         return {"status": "ok", "ticker": ticker, "path": path}
@@ -168,7 +169,7 @@ class IngestionPipeline:
             return {"status": "error", "cik": cik, "ticker": ticker, "error": str(e)}
 
         path = _blob_path("fundamentals", ticker=ticker, cik=cik, date=self._date)
-        self._blob.upload_json(_INPUT_CONTAINER, path, fundamentals, metadata={"ticker": ticker, "cik": cik, "date": self._date})
+        self._blob.upload_json(self._blob.input_container, path, fundamentals, metadata={"ticker": ticker, "cik": cik, "date": self._date})
 
         self._log.append(f"SEC fundamentals {ticker} ingested")
         return {"status": "ok", "cik": cik, "ticker": ticker, "path": path}
@@ -188,11 +189,11 @@ class IngestionPipeline:
 
         # Store product segments
         path = f"inputs/segments/{cik}/{ticker}/{self._date}_product.json"
-        self._blob.upload_json(_INPUT_CONTAINER, path, product_segments, metadata={"ticker": ticker, "cik": cik, "date": self._date, "axis": "product"})
+        self._blob.upload_json(self._blob.input_container, path, product_segments, metadata={"ticker": ticker, "cik": cik, "date": self._date, "axis": "product"})
 
         # Store geographic segments
         geo_path = f"inputs/segments/{cik}/{ticker}/{self._date}_geographic.json"
-        self._blob.upload_json(_INPUT_CONTAINER, geo_path, geo_segments, metadata={"ticker": ticker, "cik": cik, "date": self._date, "axis": "geographic"})
+        self._blob.upload_json(self._blob.input_container, geo_path, geo_segments, metadata={"ticker": ticker, "cik": cik, "date": self._date, "axis": "geographic"})
 
         self._log.append(f"SEC segments {ticker} ingested")
         return {"status": "ok", "cik": cik, "ticker": ticker, "path": path, "geo_path": geo_path}
@@ -210,7 +211,7 @@ class IngestionPipeline:
             return {"status": "error", "cik": cik, "ticker": ticker, "error": str(e)}
 
         path = _blob_path("narrative", ticker=ticker, cik=cik, date=self._date)
-        self._blob.upload_json(_INPUT_CONTAINER, path, guidance, metadata={"ticker": ticker, "cik": cik, "date": self._date})
+        self._blob.upload_json(self._blob.input_container, path, guidance, metadata={"ticker": ticker, "cik": cik, "date": self._date})
 
         self._log.append(f"SEC EFTS {ticker} ingested")
         return {"status": "ok", "cik": cik, "ticker": ticker, "path": path}

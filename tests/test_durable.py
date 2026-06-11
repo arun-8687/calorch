@@ -289,16 +289,20 @@ class TestOrchestratorLogic:
 # ---------------------------------------------------------------------------
 class TestRegistration:
     def test_all_activities_exist(self):
-        from calorch.durable.activities import activity_register
+        import azure.functions as func
 
-        names = [a._function._name for a in activity_register]
-        assert names == [
+        from calorch.durable import register_blueprints
+
+        app = func.FunctionApp()
+        register_blueprints(app)
+        registered = {f.get_function_name() for f in app.get_functions()}
+        assert {
             "activity_scan_calendar",
             "activity_classify",
             "activity_agent",
             "activity_deliver",
             "activity_aggregate_briefing",
-        ]
+        } <= registered
 
     def test_orchestrator_and_triggers_exist(self):
         from calorch.durable.orchestrator import (
@@ -322,3 +326,76 @@ class TestRegistration:
         registered = {f.get_function_name() for f in app.get_functions()}
         assert "calorch_orchestrator" in registered
         assert "activity_agent" in registered
+
+
+# ---------------------------------------------------------------------------
+# Activity-level resilience + payload slimming (REL-1, REL-2, OBS-5)
+# ---------------------------------------------------------------------------
+class TestActivityResilience:
+    def test_agent_impl_degrades_on_malformed_input(self):
+        """REL-2: a bad event returns an error payload, never raises."""
+        from calorch.durable import activities as A
+
+        out = A._agent_impl({"event": {}, "classification": {}, "run_id": "r1"})
+        assert out["documents"] == {} and out["prepared_emails"] == {}
+        assert out["errors"] and out["errors"][0].startswith("agent:")
+
+    def test_deliver_impl_degrades_on_malformed_input(self):
+        """REL-2: a bad delivery returns an error payload, never raises."""
+        from calorch.durable import activities as A
+
+        out = A._deliver_impl({"event": {}, "classification": {}, "preview": {}, "run_id": "r1"})
+        assert out["emails"] == {} and out["followups"] == []
+        assert out["errors"] and out["errors"][0].startswith("deliver:")
+
+    def test_rehydrate_reads_local_html(self, tmp_path):
+        """REL-1: deliver rebuilds the body stripped by activity_agent from disk."""
+        from calorch.durable.activities import _rehydrate_email_html
+
+        f = tmp_path / "ev.html"
+        f.write_text("<html>body</html>", encoding="utf-8")
+        preview = {"event_id": "ev-1", "html": "", "html_path": str(f)}
+        out = _rehydrate_email_html(preview, "run-1")
+        assert out["html"] == "<html>body</html>"
+
+    def test_rehydrate_noop_when_body_present(self):
+        from calorch.durable.activities import _rehydrate_email_html
+
+        preview = {"event_id": "ev-1", "html": "<keep/>", "html_path": "/nope"}
+        assert _rehydrate_email_html(preview, "r")["html"] == "<keep/>"
+
+    def test_correlated_sets_and_clears_run_id(self):
+        """OBS-5: the decorator stamps run_id during the call and clears after."""
+        from calorch.durable.activities import _correlated
+        from calorch.logging_config import get_run_id
+
+        seen = {}
+
+        @_correlated
+        def act(input):
+            seen["during"] = get_run_id()
+            return {"ok": True}
+
+        act({"run_id": "run-42"})
+        assert seen["during"] == "run-42"
+        assert get_run_id() is None  # cleared in finally
+
+
+def test_status_payload_excludes_sensitive_fields():
+    """SEC-4: the status endpoint exposes counts, never input/errors/log bodies."""
+    from types import SimpleNamespace
+
+    from calorch.durable.orchestrator import _status_payload
+
+    class RS:
+        name = "Completed"
+
+    status = SimpleNamespace(
+        instance_id="r1", runtime_status=RS(), created_time=None, last_updated_time=None,
+        input_={"secret": "x"},
+        output={"event_count": 3, "approval_status": "approved",
+                "errors": ["docx:ev-1:boom"], "log": ["sent ev-1"], "followup_count": 2},
+    )
+    body = _status_payload(status)
+    assert body["event_count"] == 3 and body["error_count"] == 1 and body["followup_count"] == 2
+    assert "errors" not in body and "log" not in body and "input" not in body

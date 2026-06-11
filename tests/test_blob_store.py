@@ -169,3 +169,15 @@ class TestMakeBlobStore:
             s = make_blob_store(account_url="https://test.blob.core.windows.net")
             MockCls.assert_called_once()
             assert s is mock_instance
+
+def test_make_blob_store_uses_configured_containers(tmp_path):
+    """STD-1: container names flow from settings into the store, not hardcoded."""
+    from calorch.blob_store import make_blob_store
+
+    store = make_blob_store(
+        local_root=tmp_path, input_container="custom-in", output_container="custom-out"
+    )
+    assert store.input_container == "custom-in"
+    assert store.output_container == "custom-out"
+    store.upload_bytes(store.output_container, "k.txt", b"x")
+    assert (tmp_path / "custom-out" / "k.txt").exists()

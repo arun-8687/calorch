@@ -25,7 +25,6 @@ from calorch.providers import (
 
 log = logging.getLogger("calorch.blob_reader")
 
-_INPUT_CONTAINER = "calorch-inputs"
 
 
 def _today() -> str:
@@ -55,7 +54,7 @@ class BlobMacroProvider:
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
         path = _blob_path("macro", date=self._date)
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             log.warning("Macro snapshot not found in blob: %s", path)
             return {}
@@ -71,7 +70,7 @@ class BlobPriceProvider:
 
     def quote(self, ticker: str) -> dict[str, Any]:
         path = _blob_path("price", ticker=ticker, date=self._date)
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             return _empty_price(f"No blob for {ticker} on {self._date}")
         return data
@@ -79,7 +78,7 @@ class BlobPriceProvider:
     def ohlcv(self, ticker: str, *, days: int = 252) -> list[dict[str, Any]]:
         # OHLCV is stored in a separate blob
         path = f"inputs/price/{ticker}/{self._date}_ohlcv.json"
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             return []
         return data
@@ -100,7 +99,7 @@ class BlobConsensusProvider:
 
     def estimates(self, ticker: str) -> dict[str, Any]:
         path = _blob_path("consensus", ticker=ticker, date=self._date)
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             return _empty_consensus(f"No consensus blob for {ticker} on {self._date}")
         return data
@@ -108,7 +107,7 @@ class BlobConsensusProvider:
     def recommendations(self, ticker: str) -> dict[str, Any]:
         # Recommendations are stored alongside estimates
         path = _blob_path("consensus", ticker=ticker, date=self._date)
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             return _empty_consensus(f"No consensus blob for {ticker}")
         return {
@@ -138,7 +137,7 @@ class BlobSegmentProvider:
 
     def latest_segments(self, cik: str, ticker: str, *, axis: str = "product") -> list[dict[str, Any]]:
         path = f"inputs/segments/{cik}/{ticker}/{self._date}_{axis}.json"
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             return []
         return data
@@ -153,7 +152,7 @@ class BlobFundamentalsProvider:
 
     def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
         path = f"inputs/fundamentals/{cik}/{ticker}/{self._date}.json"
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             return {"source": "blob", "ticker": ticker, "note": f"No fundamentals blob for {ticker} on {self._date}"}
         return data
@@ -168,7 +167,7 @@ class BlobNarrativeProvider:
 
     def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]:
         path = f"inputs/narrative/{cik}/{ticker}/{self._date}.json"
-        data = self._blob.download_json(_INPUT_CONTAINER, path)
+        data = self._blob.download_json(self._blob.input_container, path)
         if data is None:
             return []
         return data[:limit]

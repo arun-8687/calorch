@@ -270,11 +270,16 @@ def _render_html_email_inner(analysis: EventAnalysis, event: CalendarEvent, doc_
             f'<div class="section"><h2>{html.escape(heading)}</h2><ul>{bullets}</ul></div>'
         )
 
-    doc_link_html = (
-        f'<p>Full brief: <a href="{html.escape(doc_link)}">{html.escape(link_label)}</a></p>'
-        if doc_link
-        else ""
-    )
+    # doc_link can be event-derived (ev.web_link): only emit an anchor for
+    # http(s)/file schemes — a javascript:/data: URL survives html.escape.
+    if doc_link and doc_link.startswith(("https://", "http://", "file://")):
+        doc_link_html = (
+            f'<p>Full brief: <a href="{html.escape(doc_link)}">{html.escape(link_label)}</a></p>'
+        )
+    elif doc_link:
+        doc_link_html = f"<p>Full brief: {html.escape(link_label)} ({html.escape(doc_link)})</p>"
+    else:
+        doc_link_html = ""
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">{_HTML_CSS}</head>

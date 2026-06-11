@@ -86,6 +86,10 @@ _PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b
 _ACCOUNT_RE = re.compile(r"\b\d{8,17}\b")  # bank account / routing numbers
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+")
 _API_KEY_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password)[\"'\s:=]+([A-Za-z0-9._\-]{8,})")
+# Azure storage / SAS connection-string secrets (e.g. AccountKey=…, sig=…).
+_AZURE_SECRET_RE = re.compile(
+    r"(?i)(AccountKey|SharedAccessSignature|sig)=([A-Za-z0-9%+/_\-]{8,})"
+)
 
 # Calendar body PII — only used when message key is 'body' or 'body_preview'
 _BODY_KEYS = frozenset({"body", "body_preview", "bodyPreview", "description"})
@@ -101,6 +105,7 @@ def _redact_string(s: str) -> str:
     s = _PHONE_RE.sub(_REDACTION, s)
     s = _BEARER_RE.sub(rf"\1{_REDACTION}", s)
     s = _API_KEY_RE.sub(rf"\1={_REDACTION}", s)
+    s = _AZURE_SECRET_RE.sub(rf"\1={_REDACTION}", s)
     return s
 
 

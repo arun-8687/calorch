@@ -176,3 +176,26 @@ def test_empty_calendar_still_writes_briefing(ctx):
     assert result["events"] == []
     assert result.get("emails", {}) == {}
     assert result["weekly_briefing"].event_count == 0
+
+
+def test_briefing_html_escapes_error_strings(ctx):
+    """SEC-2: event-derived error text is HTML-escaped in the weekly briefing."""
+    from datetime import datetime, UTC
+    from pathlib import Path
+
+    from calorch.nodes import aggregate_briefing
+
+    state = {
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
+        "run_id": "xss-test",
+        "events": [],
+        "classifications": {},
+        "emails": {},
+        "followups": [],
+        "errors": ["docx:<script>alert(1)</script>:boom"],
+    }
+    result = aggregate_briefing(state)
+    html_text = Path(result["weekly_briefing"].path).read_text(encoding="utf-8")
+    assert "<script>alert(1)</script>" not in html_text
+    assert "&lt;script&gt;" in html_text

@@ -90,9 +90,23 @@ def test_rag_wrapper_augments_last_human_message():
     assert retriever.queries == [("Ticker: AAPL\nTask: Generate guidance.", "AAPL")]
     # the human message now carries the retrieved passage; system msg untouched
     human = llm.seen[-1]
-    assert "RELEVANT PRIOR RESEARCH" in human.content
+    assert "<<<DATA" in human.content and "DATA>>>" in human.content  # fenced as untrusted data
+    assert "do not contradict" not in human.content                   # SEC-5: phrasing removed
     assert "gross margin to 46%" in human.content
     assert llm.seen[0].content == "sys"
+
+
+def test_rag_wrapper_caches_retrieval_per_event():
+    """Repeated sections for the same ticker/prompt reuse one search (REL-4)."""
+    llm = _FakeLLM()
+    retriever = _FakeRetriever(
+        [KnowledgePassage(text="cached passage", source="AAPL (ev-1)", score=1.0)]
+    )
+    model = RagChatModel(llm, retriever, top_k=3)
+    msg = [HumanMessage(content="Ticker: AAPL\nTask: Generate guidance.")]
+    model.invoke(list(msg))
+    model.invoke(list(msg))
+    assert len(retriever.queries) == 1  # second call served from cache
 
 
 def test_rag_wrapper_no_passages_leaves_messages_unchanged():

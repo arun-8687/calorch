@@ -114,3 +114,17 @@ def test_management_meeting_infers_role(sample_event):
         llm_call=None,
     )
     assert analysis.role_focus == "CFO"
+
+
+def test_html_email_suppresses_unsafe_doc_link_scheme(sample_event, sample_classification):
+    """SEC-6: javascript:/data: doc links are not emitted as href."""
+    from calorch.analysis import EventAnalysis
+
+    analysis = EventAnalysis(
+        event_id=sample_event.id, event_type=EventType.EARNINGS_CALL,
+        title="Brief", sections=[("H", ["a"])], confidence=0.9,
+    )
+    out = render_html_email(analysis, sample_event, doc_link="javascript:alert(1)")
+    assert 'href="javascript:' not in out
+    safe = render_html_email(analysis, sample_event, doc_link="https://example.com/x.docx")
+    assert 'href="https://example.com/x.docx"' in safe

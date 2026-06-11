@@ -42,6 +42,8 @@ def build_context(*, send_emails: bool, output_dir: Path) -> Context:
         connection_string=s.azure_storage_connection_string,
         account_url=s.azure_storage_account_url,
         local_root=s.blob_local_root,
+        input_container=s.blob_input_container,
+        output_container=s.blob_output_container,
     )
     from calorch.knowledge import make_knowledge_store
     ctx = Context(
@@ -158,10 +160,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-    )
+    from calorch.logging_config import configure_logging
+
+    configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

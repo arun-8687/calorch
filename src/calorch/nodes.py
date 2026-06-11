@@ -13,6 +13,7 @@ of runtime objects.
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -53,6 +54,10 @@ from calorch.tools import (
 from calorch.telemetry import start_span
 
 log = logging.getLogger("calorch.nodes")
+
+
+class _SkipPreview(Exception):
+    """Internal sentinel: skip the email-preview block without failing the event."""
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +422,7 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
         try:
             from calorch.blob_store import input_blob_path
             input_key = input_blob_path("enterprise", f"{run_name}/{event_name}")
-            c.blob_store.upload_json("calorch-inputs", input_key, ed, metadata={"event_id": ev.id, "run_id": run_name})
+            c.blob_store.upload_json(c.blob_store.input_container, input_key, ed, metadata={"event_id": ev.id, "run_id": run_name})
         except (OSError, ValueError) as e:
             log.warning("blob input upload failed for %s: %s", ev.id, e)
 
@@ -448,7 +453,7 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
                 from calorch.blob_store import output_blob_path
                 doc_blob = output_blob_path(run_name, event_name, f"{event_name}.docx")
                 blob_url = c.blob_store.upload_file(
-                    "calorch-outputs", doc_blob, doc_path,
+                    c.blob_store.output_container, doc_blob, doc_path,
                     content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
                 )
@@ -479,7 +484,7 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
                     "data_sources": analysis.data_sources,
                 }
                 c.blob_store.upload_json(
-                    "calorch-outputs", analysis_blob, analysis_dict,
+                    c.blob_store.output_container, analysis_blob, analysis_dict,
                     metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
                 )
             except (OSError, ValueError) as e:
@@ -522,9 +527,12 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
     sec_link = ev.web_link or None
 
     # --- 4) HTML email preview ---
+    # If DOCX/analysis generation failed above, the error is already recorded;
+    # skip the preview rather than crashing the whole event/activity.
     try:
         if analysis is None:
-            raise RuntimeError("analysis not generated — skipping email preview")
+            errors.append(f"email_preview:{ev.id}:analysis not generated")
+            raise _SkipPreview
         # Prefer the EDGAR web link over the local OneDrive URL for SEC events
         link_for_email = sec_link or onedrive_url
         link_label = "View filing on EDGAR" if sec_link and not onedrive_url else "Open DOCX"
@@ -549,7 +557,7 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
                 from calorch.blob_store import output_blob_path
                 email_blob = output_blob_path(run_name, event_name, f"{event_name}.html")
                 email_blob_url = c.blob_store.upload_file(
-                    "calorch-outputs", email_blob, html_path,
+                    c.blob_store.output_container, email_blob, html_path,
                     content_type="text/html",
                     metadata={"event_id": ev.id, "run_id": run_name},
                 )
@@ -565,6 +573,8 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
                 )
             except (OSError, ValueError) as e:
                 log.warning("blob HTML upload failed for %s: %s", ev.id, e)
+    except _SkipPreview:
+        pass  # analysis missing — error already recorded above
     except (httpx.HTTPError, ConnectionError, TimeoutError, OSError, ValueError, KeyError) as e:
         log.exception("email preview generation failed for %s", ev.id)
         errors.append(f"email_preview:{ev.id}:{e!r}")
@@ -775,10 +785,16 @@ def _deliver_event_inner(c, ev, cls, preview, document, onedrive_url, send_email
         if onedrive_url or sec_link:
             link = onedrive_url or sec_link
             label = "Open DOCX" if onedrive_url else "View filing on EDGAR"
+            # Event-derived links (ev.web_link) are untrusted: escape and only
+            # emit an anchor for http(s) schemes, else render the URL as text.
+            if link and link.startswith(("https://", "http://")):
+                content = f'<p>Brief ready: <a href="{html.escape(link, quote=True)}">{label}</a></p>'
+            else:
+                content = f"<p>Brief ready: {html.escape(link or '')}</p>"
             body = {
                 "body": {
                     "contentType": "HTML",
-                    "content": f"<p>Brief ready: <a href=\"{link}\">{label}</a></p>",
+                    "content": content,
                 }
             }
             c.graph.patch_event(ev.id, body)
@@ -947,11 +963,17 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
             ("Open issues", state.get("errors", []) or ["(none)"]),
         ]
         out_path = c.out("briefings/weekly.html")
-        html = f"""<!doctype html><html><head><meta charset='utf-8'></head><body>
+        sections_html = "".join(
+            f"<h2>{html.escape(str(h))}</h2><ul>"
+            + "".join(f"<li>{html.escape(str(x))}</li>" for x in items)
+            + "</ul>"
+            for h, items in sections
+        )
+        briefing_html = f"""<!doctype html><html><head><meta charset='utf-8'></head><body>
 <h1>Weekly briefing &mdash; {state['window_start'].date()} to {state['window_end'].date()}</h1>
-{''.join(f'<h2>{h}</h2><ul>{"".join(f"<li>{x}</li>" for x in items)}</ul>' for h, items in sections)}
+{sections_html}
 </body></html>"""
-        write_text(out_path, html)
+        write_text(out_path, briefing_html)
         span.set_attribute("sent", sent)
         span.set_attribute("drafts", drafts)
         span.set_attribute("failed", len(failed))
@@ -964,7 +986,7 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
                 run_id = str(state.get("run_id", "run"))
                 bpath = briefing_blob_path(run_id)
                 briefing_blob_url = c.blob_store.upload_file(
-                    "calorch-outputs", bpath, out_path,
+                    c.blob_store.output_container, bpath, out_path,
                     content_type="text/html",
                     metadata={"run_id": run_id},
                 )
