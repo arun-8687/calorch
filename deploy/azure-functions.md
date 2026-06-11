@@ -155,6 +155,8 @@ for the authoritative list and defaults). Set them with
 |---|---|---|
 | `AzureWebJobsStorage` | set automatically by `az functionapp create` | Durable task hub (`CalorchTaskHub`) + host bookkeeping |
 | `CRON_SCHEDULE` | `0 0 9 * * 1` (default) | Timer trigger — NCRONTAB with seconds; default is Mondays 09:00 UTC. Read at import time, so changing it requires an app restart |
+| `APPROVER_EMAILS` | CSV of approver addresses | Notified by email when a send run pauses at the gate, with a tokenized review-page link. Empty = no notification (gate still works via the keyed API) |
+| `APPROVAL_BASE_URL` | *(optional)* | Base URL for emailed links; defaults to `https://$WEBSITE_HOSTNAME` |
 | `OUTPUT_DIR` | `/tmp/calorch-out` | Artifact scratch dir. **Required on Azure**: the package mount is read-only, the code default `./out` will fail. Artifacts are persisted to blob storage; `/tmp` is fine as scratch |
 | `SEC_CACHE_DIR` | `/tmp/calorch-cache/sec` | Same reason as above |
 | `USE_MOCKS` | `false` for production, `true` to smoke-test without credentials | With `true` the app runs end-to-end on seed data and mock clients |
@@ -298,14 +300,15 @@ are installed server-side, so your local platform doesn't matter.
 `function_app.py`, `host.json`, and `src/calorch/**` are packaged
 automatically.
 
-Verify all 10 functions registered:
+Verify all 13 functions registered:
 
 ```bash
 az functionapp function list -g $RG -n $APP --query "[].name" -o tsv
 # expected:
 # calorch_orchestrator, timer_start, http_start, http_approval, http_status,
+# http_review, http_decision,
 # activity_scan_calendar, activity_classify, activity_agent,
-# activity_deliver, activity_aggregate_briefing
+# activity_deliver, activity_aggregate_briefing, activity_request_approval
 ```
 
 ---
@@ -326,13 +329,16 @@ curl -sS -X POST "$BASE/run?code=$FUNC_KEY" \
 
 # 2. poll status
 curl -sS "$BASE/status/<instance_id>?code=$FUNC_KEY" | python -m json.tool
-# runtime_status: Running → Completed; output contains event_count,
-# documents, prepared_emails, weekly_briefing
+# runtime_status: Running → Completed; body exposes counts
+# (event_count, approval_status, error_count, followup_count)
 
-# 3. approval-gated send run
+# 3. approval-gated send run (with APPROVER_EMAILS configured)
 curl -sS -X POST "$BASE/run?code=$FUNC_KEY" \
   -d '{"send_emails":true,"require_approval":true,"approval_timeout_hours":24}'
-# review the prepared emails (calorch-outputs container), then:
+# Each approver receives an email with a tokenized review-page link:
+#   GET $BASE/review/<instance_id>?token=…   (renders the email previews)
+# Open it in a browser and click Approve & send (a POST form — the emailed
+# link itself is read-only). API/automation alternative, with the key:
 curl -sS -X POST "$BASE/approval/<instance_id>?code=$FUNC_KEY" \
   -d '{"approved":true}'
 ```
@@ -449,7 +455,8 @@ app — no secrets in the repo.
 - [ ] All secrets are Key Vault references; nothing sensitive in plain app settings
 - [ ] Managed identity used for blob access (`AZURE_STORAGE_ACCOUNT_URL`, no connection string)
 - [ ] Graph app restricted to the research mailbox via application access policy
-- [ ] Function keys rotated on a schedule (`az functionapp keys set`); distribute the `approval` endpoint key only to approvers
+- [ ] Function keys rotated on a schedule (`az functionapp keys set`); approvers don't need keys — they use the emailed review link
+- [ ] Note: `review`/`decision` endpoints are deliberately **anonymous + per-run token** (SHA-256 verified against the orchestration's `custom_status`). No function key goes into approval emails, the emailed link is a read-only GET (mail scanners like Outlook SafeLinks prefetch GETs and must not be able to approve), and decisions are POST-only forms
 - [ ] `--allow-blob-public-access false` on the storage account (set in §3)
 - [ ] `SEC_USER_AGENT` carries a real contact (SEC ToS)
 - [ ] Optional hardening: identity-based `AzureWebJobsStorage__accountName` instead of the bootstrap connection string; Private Endpoints + VNet (requires EP1/Flex with networking)

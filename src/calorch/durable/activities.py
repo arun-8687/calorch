@@ -280,12 +280,64 @@ def activity_aggregate_briefing(input: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Activity 6: request approval — notify approvers that a run is paused
+# ---------------------------------------------------------------------------
+@bp.activity_trigger(input_name="input")
+@_correlated
+def activity_request_approval(input: dict[str, Any]) -> dict[str, Any]:
+    """Email the approvers a run summary + tokenized review-page link."""
+    return _request_approval_impl(input)
+
+
+def _request_approval_impl(input: dict[str, Any]) -> dict[str, Any]:
+    """Body of activity_request_approval (plain function for unit tests).
+
+    Never raises: a notification failure must not fail the run — the gate
+    still works via logs and the key-protected approval API.
+    """
+    import os
+
+    from calorch.config import get_settings
+    from calorch.durable.approval import build_approval_email
+
+    try:
+        _ensure_context()
+        s = get_settings()
+        if not s.approver_emails:
+            return {"notified": [], "log": ["approval notify skipped: APPROVER_EMAILS not set"]}
+
+        base = s.approval_base_url or (
+            f"https://{os.environ['WEBSITE_HOSTNAME']}"
+            if os.getenv("WEBSITE_HOSTNAME")
+            else "http://localhost:7071"
+        )
+        instance_id = input["instance_id"]
+        review_url = f"{base.rstrip('/')}/api/review/{instance_id}?token={input['token']}"
+        subject, html_body = build_approval_email(
+            run_id=input.get("run_id", ""),
+            prepared=input.get("prepared", []),
+            review_url=review_url,
+            timeout_hours=float(input.get("timeout_hours", 24)),
+        )
+        c = _ctx()
+        c.graph.send_mail(to=s.approver_emails, subject=subject, html=html_body, attachment_b64=None)
+        return {
+            "notified": list(s.approver_emails),
+            "log": [f"approval request sent to {len(s.approver_emails)} approver(s)"],
+        }
+    except Exception as e:  # noqa: BLE001 - notification is best-effort
+        log.exception("approval notification failed for %s", input.get("run_id", "?"))
+        return {"notified": [], "errors": [f"approval_notify:{e!r}"], "log": []}
+
+
 activity_register = [
     activity_scan_calendar,
     activity_classify,
     activity_agent,
     activity_deliver,
     activity_aggregate_briefing,
+    activity_request_approval,
 ]
 
 

@@ -212,20 +212,35 @@ calorch_orchestrator                       (deterministic — no I/O, no wall cl
   → activity_aggregate_briefing            (cross-event weekly summary → blob)
 ```
 
-### Functions in the app (10)
+### Functions in the app (13)
 
 | Function | Trigger | Responsibility |
 |---|---|---|
 | `calorch_orchestrator` | orchestration | Sequences the workflow above; deterministic replay |
 | `timer_start` | timer (`CRON_SCHEDULE`) | Starts a scheduled run (default Mon 09:00 UTC, 7-day lookahead) |
 | `http_start` | `POST /api/run` | Starts a run on demand; returns the status-query URLs |
-| `http_approval` | `POST /api/approval/{id}` | Raises the `approval` event to resume a paused run |
-| `http_status` | `GET /api/status/{id}` | Reports `runtime_status`, input, and output |
+| `http_approval` | `POST /api/approval/{id}` | Raises the `approval` event (function-key auth; for API/automation) |
+| `http_status` | `GET /api/status/{id}` | Reports run status counts (no bodies) |
+| `http_review` | `GET /api/review/{id}?token=…` | Approval review page — renders the prepared previews (anonymous + one-time token) |
+| `http_decision` | `POST /api/decision/{id}` | Records the approve/reject decision from the review page (anonymous + token) |
 | `activity_scan_calendar` | activity | Pulls calendar events from Graph |
 | `activity_classify` | activity | Two-pass classification (keywords/SEC form + LLM) |
 | `activity_agent` | activity | Runs the LangGraph agent subgraph for one event |
 | `activity_deliver` | activity | Idempotent draft/send + calendar patch + repository upsert |
 | `activity_aggregate_briefing` | activity | Builds the weekly HTML briefing |
+| `activity_request_approval` | activity | Emails approvers the run summary + review-page link |
+
+### Approval workflow
+
+When a send run pauses at the gate, the addresses in `APPROVER_EMAILS` get
+an email (via Graph) summarising the prepared emails, with one link to the
+**review page**: the actual email previews rendered inline, plus Approve /
+Reject buttons. The link carries a **per-run one-time token** (its SHA-256
+lives in the orchestration's `custom_status`) — no function key in any
+email, and the token dies with the run. The emailed link is a read-only GET
+and decisions are POST-only forms, so mail scanners that prefetch links
+(Outlook SafeLinks) can never trigger an approval. The key-protected
+`POST /api/approval/{id}` remains for automation.
 
 ### Why Durable Functions
 
@@ -357,6 +372,8 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `AZURE_OPENAI_DEPLOYMENT` | No | Chat deployment (default `gpt-4o`) |
 | `OPENCODE_GO_API_KEY` / `OPENCODE_GO_MODEL` | No | OpenAI-compatible alt; overrides Azure OpenAI |
 | `CRON_SCHEDULE` | No | Timer NCRONTAB (default `0 0 9 * * 1` = Mon 09:00 UTC) |
+| `APPROVER_EMAILS` | No | CSV of addresses notified when a send run awaits approval (empty = no email; gate still works via API) |
+| `APPROVAL_BASE_URL` | No | Base URL for emailed review links (default `https://$WEBSITE_HOSTNAME`) |
 | `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` | Yes (prod) | Entra ID app registration for Microsoft Graph |
 | `GRAPH_USER_ID` | No | Mailbox/calendar UPN (default `me`) |
 | `ONEDRIVE_DRIVE_ID` | No | OneDrive target for DOCX archive |

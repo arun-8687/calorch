@@ -36,6 +36,8 @@ def base_settings() -> Settings:
         search_semantic_config=None,
         rag_top_k=4,
         knowledge_writeback=True,
+        approver_emails=[],
+        approval_base_url=None,
         factset_api_key=None,
         bloomberg_blpapi_host=None,
         lseg_client_id=None,

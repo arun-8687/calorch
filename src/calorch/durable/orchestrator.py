@@ -32,6 +32,15 @@ from typing import Any
 import azure.durable_functions as df
 import azure.functions as func
 
+from calorch.durable.approval import (
+    approval_state,
+    load_previews,
+    render_decision_page,
+    render_review_page,
+    token_hash,
+    verify_token,
+)
+
 bp = df.Blueprint()
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -118,6 +127,29 @@ def run_orchestrator(context: df.DurableOrchestrationContext):
     delivery_approved = True
     approval_status = "not_required"
     if send_emails and require_approval and prepared_emails:
+        # One-time review token: generated replay-safely, only its hash is
+        # persisted (in custom_status) so the review/decision endpoints can
+        # verify the emailed link without any function key in the email.
+        approval_token = str(context.new_uuid())
+        context.set_custom_status(
+            {"approval": "pending", "token_sha256": token_hash(approval_token)}
+        )
+        prepared_summary = [
+            {"event_id": k, "subject": v.get("subject", ""), "to": v.get("to", [])}
+            for k, v in prepared_emails.items()
+            if isinstance(v, dict)
+        ]
+        yield context.call_activity_with_retry(
+            "activity_request_approval",
+            RETRY,
+            {
+                "run_id": run_id,
+                "instance_id": context.instance_id,
+                "token": approval_token,
+                "prepared": prepared_summary,
+                "timeout_hours": approval_timeout_hours,
+            },
+        )
         approval_task = context.wait_for_external_event("approval")
         deadline = context.current_utc_datetime + timedelta(hours=approval_timeout_hours)
         timeout_task = context.create_timer(deadline)
@@ -131,6 +163,7 @@ def run_orchestrator(context: df.DurableOrchestrationContext):
         else:
             delivery_approved = False
             approval_status = "timed_out"
+        context.set_custom_status({"approval": approval_status})
 
     # --- 5) fan-out: deliver approved events ---
     emails: dict[str, Any] = {}
@@ -334,6 +367,85 @@ def _status_payload(status: Any) -> dict[str, Any]:
         "error_count": len(out.get("errors", []) or []),
         "followup_count": out.get("followup_count"),
     }
+
+
+# ---------------------------------------------------------------------------
+# HTTP trigger — approval review page (anonymous + one-time token)
+# ---------------------------------------------------------------------------
+# Both review/decision are ANONYMOUS so no function key appears in approval
+# emails; access is gated by the per-run token hashed into custom_status.
+# The review GET is strictly read-only (mail scanners prefetch GET links);
+# the decision is a POST form on the page — see durable/approval.py.
+@bp.route(route="review/{instance_id}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@bp.durable_client_input(client_name="client")
+async def http_review(req: func.HttpRequest, client):
+    """GET /api/review/{instance_id}?token=… — render the approval review page."""
+    instance_id = req.route_params.get("instance_id") or ""
+    status = await client.get_status(instance_id)
+    return _review_response(instance_id, req.params.get("token", ""), status)
+
+
+def _review_response(instance_id: str, token: str, status: Any) -> func.HttpResponse:
+    """Build the review-page response (plain function for unit tests)."""
+    if status is None or getattr(status, "runtime_status", None) is None:
+        return func.HttpResponse("Run not found.", status_code=404, mimetype="text/plain")
+    custom = getattr(status, "custom_status", None)
+    if not verify_token(custom, token):
+        return func.HttpResponse("Invalid or expired approval link.", status_code=403, mimetype="text/plain")
+    page = render_review_page(
+        instance_id=instance_id,
+        token=token,
+        previews=load_previews(instance_id),
+        state=approval_state(custom),
+        decision_url=f"/api/decision/{instance_id}",
+    )
+    return func.HttpResponse(page, status_code=200, mimetype="text/html")
+
+
+# ---------------------------------------------------------------------------
+# HTTP trigger — approval decision (anonymous + one-time token, POST only)
+# ---------------------------------------------------------------------------
+@bp.route(route="decision/{instance_id}", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@bp.durable_client_input(client_name="client")
+async def http_decision(req: func.HttpRequest, client):
+    """POST /api/decision/{instance_id} — record the approve/reject decision."""
+    instance_id = req.route_params.get("instance_id") or ""
+    status = await client.get_status(instance_id)
+    check, approved = _decision_check(instance_id, req.get_body(), status)
+    if check is not None:
+        return check
+    await client.raise_event(instance_id, event_name="approval", event_data={"approved": approved})
+    return func.HttpResponse(
+        render_decision_page(instance_id, approved), status_code=200, mimetype="text/html"
+    )
+
+
+def _decision_check(
+    instance_id: str, body: bytes, status: Any
+) -> tuple[func.HttpResponse | None, bool]:
+    """Validate a decision request (plain function for unit tests).
+
+    Returns ``(error_response, approved)`` — ``error_response`` is None when
+    the decision may proceed.
+    """
+    from urllib.parse import parse_qs
+
+    form = parse_qs((body or b"").decode("utf-8", errors="replace"))
+    token = (form.get("token") or [""])[0]
+    decision = (form.get("decision") or [""])[0]
+
+    if status is None or getattr(status, "runtime_status", None) is None:
+        return func.HttpResponse("Run not found.", status_code=404, mimetype="text/plain"), False
+    custom = getattr(status, "custom_status", None)
+    if not verify_token(custom, token):
+        return func.HttpResponse("Invalid or expired approval link.", status_code=403, mimetype="text/plain"), False
+    if approval_state(custom) != "pending":
+        return func.HttpResponse(
+            "This run is no longer awaiting approval.", status_code=409, mimetype="text/plain"
+        ), False
+    if decision not in ("approve", "reject"):
+        return func.HttpResponse("decision must be approve or reject", status_code=400, mimetype="text/plain"), False
+    return None, decision == "approve"
 
 
 def get_blueprint() -> df.Blueprint:

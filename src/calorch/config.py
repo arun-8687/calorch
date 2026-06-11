@@ -60,6 +60,10 @@ class Settings:
     rag_top_k: int
     knowledge_writeback: bool    # push each prepared analysis into the index
 
+    # Approval workflow — notify these addresses when a send run pauses
+    approver_emails: list[str]
+    approval_base_url: str | None  # override link base (default WEBSITE_HOSTNAME)
+
     factset_api_key: str | None
     bloomberg_blpapi_host: str | None
     lseg_client_id: str | None
@@ -119,6 +123,8 @@ def get_settings() -> Settings:
         search_semantic_config=_env("AZURE_SEARCH_SEMANTIC_CONFIG"),
         rag_top_k=int(_env("RAG_TOP_K", "4") or "4"),
         knowledge_writeback=_bool("KNOWLEDGE_WRITEBACK", True),
+        approver_emails=_csv("APPROVER_EMAILS", ""),
+        approval_base_url=_env("APPROVAL_BASE_URL"),
         factset_api_key=_env("FACTSET_API_KEY"),
         bloomberg_blpapi_host=_env("BLOOMBERG_BLPAPI_HOST"),
         lseg_client_id=_env("LSEG_CLIENT_ID"),

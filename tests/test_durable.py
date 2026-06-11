@@ -115,8 +115,11 @@ class FakeContext:
     def __init__(self, input_data: dict[str, Any], now: datetime | None = None):
         self._input = input_data
         self.current_utc_datetime = now or datetime(2026, 6, 8, 9, 0, 0, tzinfo=UTC)
+        self.instance_id = "fake-instance"
         self.activity_calls: list[FakeTask] = []
         self.timers: list[FakeTask] = []
+        self.custom_statuses: list[Any] = []
+        self._uuid_counter = 0
 
     def get_input(self):
         return self._input
@@ -139,6 +142,13 @@ class FakeContext:
 
     def task_any(self, tasks):
         return FakeTask("task_any", payload=tasks)
+
+    def new_uuid(self):
+        self._uuid_counter += 1
+        return f"00000000-0000-0000-0000-{self._uuid_counter:012d}"
+
+    def set_custom_status(self, status):
+        self.custom_statuses.append(status)
 
 
 def drive(gen, responder: Callable[[FakeTask], Any]) -> dict[str, Any]:
@@ -184,6 +194,7 @@ def _happy_path_responder(approval: str | None = None):
             return {
                 "activity_scan_calendar": {"events": [_EVENT], "raw_events": [{"id": "ev-1", "_form": "10-Q"}]},
                 "activity_classify": {"classifications": _CLASSIFICATION},
+                "activity_request_approval": {"notified": ["approver@x.com"]},
                 "activity_aggregate_briefing": {"weekly_briefing": {"event_count": 1}},
             }[task.name]
         if task.kind == "task_all":
@@ -399,3 +410,43 @@ def test_status_payload_excludes_sensitive_fields():
     body = _status_payload(status)
     assert body["event_count"] == 3 and body["error_count"] == 1 and body["followup_count"] == 2
     assert "errors" not in body and "log" not in body and "input" not in body
+
+
+# ---------------------------------------------------------------------------
+# Approval UX — token + custom_status flow through the orchestrator
+# ---------------------------------------------------------------------------
+class TestApprovalNotification:
+    def _run(self, approval: str):
+        from calorch.durable.orchestrator import run_orchestrator
+
+        ctx = FakeContext({"run_id": "r1", "send_emails": True, "require_approval": True})
+        result = drive(run_orchestrator(ctx), _happy_path_responder(approval))
+        return ctx, result
+
+    def test_notify_activity_receives_token_matching_custom_status(self):
+        from calorch.durable.approval import token_hash
+
+        ctx, _ = self._run("approve")
+        notify = next(t for t in ctx.activity_calls if t.name == "activity_request_approval")
+        token = notify.payload["token"]
+        assert notify.payload["instance_id"] == "fake-instance"
+        assert notify.payload["prepared"] == [
+            {"event_id": "ev-1", "subject": "AAPL brief", "to": []}
+        ]
+        # the hash stored in custom_status verifies the emailed token
+        assert ctx.custom_statuses[0] == {"approval": "pending", "token_sha256": token_hash(token)}
+
+    def test_custom_status_transitions(self):
+        for decision, expected in (("approve", "approved"), ("reject", "rejected"), ("timeout", "timed_out")):
+            ctx, result = self._run(decision)
+            assert ctx.custom_statuses[0]["approval"] == "pending"
+            assert ctx.custom_statuses[-1] == {"approval": expected}
+            assert result["approval_status"] == expected
+
+    def test_draft_mode_skips_notification_entirely(self):
+        from calorch.durable.orchestrator import run_orchestrator
+
+        ctx = FakeContext({"run_id": "r1", "send_emails": False})
+        drive(run_orchestrator(ctx), _happy_path_responder(None))
+        assert not any(t.name == "activity_request_approval" for t in ctx.activity_calls)
+        assert ctx.custom_statuses == []
