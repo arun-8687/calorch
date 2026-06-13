@@ -161,7 +161,7 @@ class IngestionPipeline:
 
         try:
             client = SecEftsClient(user_agent=self._s.sec_user_agent, cache_dir=self._s.sec_cache_dir / "efts")
-            guidance = client.search_guidance(cik=cik, ticker=ticker, limit=10)
+            guidance = client.search_for_guidance(cik=cik, ticker=ticker, limit=10)
         except Exception as e:
             log.warning("SEC EFTS filings ingestion failed for %s: %s", ticker, e)
             return {"status": "error", "cik": cik, "ticker": ticker, "error": str(e)}

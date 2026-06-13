@@ -129,7 +129,7 @@ class EftsFilingsProvider:
         if self._efts is None:
             return []
         try:
-            return self._efts.search_guidance(cik=cik, ticker=ticker, limit=limit)
+            return self._efts.search_for_guidance(cik=cik, ticker=ticker, limit=limit)
         except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
             log.warning("EFTS guidance network failure for %s: %s", ticker, e)
             return []
