@@ -10,8 +10,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "langgraph>=1.0,<2.0",
-  "langgraph-checkpoint-postgres>=3.0,<4.0",
-  "psycopg[binary]>=3.2,<4.0",
   "langchain-core>=1.0,<2.0",
   "langchain-openai>=0.2",
   "openai>=1.40",
@@ -21,34 +19,40 @@ dependencies = [
   "python-dotenv>=1.0",
   "tenacity>=8.2",
   "jinja2>=3.1",
-  "fastapi>=0.110",
-  "uvicorn[standard]>=0.27",
-  "fredapi>=0.5",
   "lxml>=5.0",
-  "azure-cosmos>=4.16,<5.0",
+  "azure-data-tables>=12.5",
+  "azure-search-documents>=11.5",
   "azure-storage-blob>=12.20",
   "azure-identity>=1.16",
-  "azure-functions>=2.0",
+  # azure-functions 2.x requires Python >=3.13; stay on 1.x for 3.11/3.12.
+  "azure-functions>=1.21,<2.0",
   "azure-functions-durable>=1.5",
   "cachetools>=5.3",
+  # Security floors for transitive deps flagged by pip-audit (CVE remediation).
+  "cryptography>=46.0.5",
+  "pyjwt>=2.13.0",
+  "urllib3>=2.7.0",
+  "idna>=3.15",
 ]
 
 [project.optional-dependencies]
 dev = [
   "langgraph-cli",
   "langgraph-sdk",
+  "markdown-it-py",   # scripts/render_architecture.py
 ]
 otel = [
   "opentelemetry-api>=1.27",
   "opentelemetry-sdk>=1.27",
-  "opentelemetry-instrumentation-fastapi>=0.48b0",
   "opentelemetry-instrumentation-httpx>=0.48b0",
   "opentelemetry-exporter-otlp-proto-http>=1.27",
 ]
 azure = [
+  "azure-data-tables>=12.5",
+  "azure-search-documents>=11.5",
   "azure-storage-blob>=12.20",
   "azure-identity>=1.16",
-  "azure-functions>=2.0",
+  "azure-functions>=1.21,<2.0",
   "azure-functions-durable>=1.5",
 ]
 
@@ -59,4 +63,30 @@ calorch = "calorch.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-calorch = ["templates/*.html", "templates/*.j2"]
+calorch = ["data/templates/*.json", "data/seed_events.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E4/E7/E9: pycodestyle errors · F: pyflakes (undefined names, unused
+# imports/vars) · B: bugbear (likely bugs) · UP: modernise to py311 idioms
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = [
+  "B008",  # function call in default argument (used deliberately for factories)
+  "UP015", # open() mode "r" is fine explicit
+  "UP042", # EventType(str, Enum) is deliberate: StrEnum changes str()/format
+           # semantics and the Pydantic JSON contract
+  "UP045", # keep Optional[RunnableConfig] in node signatures — LangGraph's
+           # signature inspector warns on the PEP 604 string form
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]   # assert False with message is fine in tests
+"scripts/*" = ["B007"]  # exploratory probe scripts

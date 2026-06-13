@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -28,34 +28,13 @@ class EventType(str, Enum):
     UNKNOWN = "unknown"
 
 
-# Maps EventType to descriptive labels. The preparation branch dispatches
-# internally via ``build_analysis()``. These labels are kept for logging and
-# classification traceability; they are not graph node names.
-EVENT_TYPE_TO_NODE: dict[EventType, str] = {
-    EventType.EARNINGS_CALL: "earnings_call",
-    EventType.MANAGEMENT_MEETING: "management_meeting",
-    EventType.CONFERENCE: "conference",
-    EventType.KOL_MEETING: "kol_meeting",
-    EventType.CHANNEL_CHECK: "channel_check",
-    EventType.PORTFOLIO_MEETING: "portfolio_meeting",
-    EventType.INTERNAL_REVIEW: "internal_review",
-    EventType.ANALYST_MEETING: "analyst_meeting",
-    EventType.UNKNOWN: "unknown",
-}
+# The classifier records ``routed_node`` as the event type's value
+# (``ClassificationResult.routed_node``); the agent-node mapping for graph
+# wiring lives in the registry (calorch.agents.agent_node_names).
 
 
-# Maps EventType to the agent subgraph node name in the main graph.
-EVENT_TYPE_TO_AGENT: dict[EventType, str] = {
-    EventType.EARNINGS_CALL: "agent_earnings_call",
-    EventType.MANAGEMENT_MEETING: "agent_management_meeting",
-    EventType.CONFERENCE: "agent_conference",
-    EventType.KOL_MEETING: "agent_kol_meeting",
-    EventType.CHANNEL_CHECK: "agent_channel_check",
-    EventType.PORTFOLIO_MEETING: "agent_portfolio_meeting",
-    EventType.INTERNAL_REVIEW: "agent_internal_review",
-    EventType.ANALYST_MEETING: "agent_analyst_meeting",
-    EventType.UNKNOWN: "agent_unknown",
-}
+# NOTE: the EventType → agent-node mapping now lives in the agent registry
+# (calorch.agents.agent_node_names); each agent module declares its own.
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +99,9 @@ class EmailArtifact(BaseModel):
     to: list[str]
     subject: str
     html_path: str
-    attachment_path: Optional[str] = None
+    attachment_path: str | None = None
     status: Literal["draft", "sent", "failed"] = "draft"
-    graph_message_id: Optional[str] = None
+    graph_message_id: str | None = None
 
 
 class PreparedEmailArtifact(BaseModel):
@@ -133,8 +112,8 @@ class PreparedEmailArtifact(BaseModel):
     subject: str
     html_path: str
     html: str
-    attachment_path: Optional[str] = None
-    document_url: Optional[str] = None
+    attachment_path: str | None = None
+    document_url: str | None = None
     blob_url: str = ""
 
 
@@ -142,7 +121,7 @@ class FollowUpItem(BaseModel):
     event_id: str
     action: str
     owner: str
-    due: Optional[datetime] = None
+    due: datetime | None = None
     notes: str = ""
 
 
@@ -213,7 +192,7 @@ class OrchestratorState(TypedDict, total=False):
 
     # ---- aggregations ----
     followups: Annotated[list[FollowUpItem], _append_unique_followups]
-    weekly_briefing: Optional[WeeklyBriefing]
+    weekly_briefing: WeeklyBriefing | None
 
     # ---- observability ----
     errors: Annotated[list[str], _append]

@@ -26,7 +26,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
 
-from calorch.agents import make_agent_subgraph
+from calorch.agents import iter_agents, make_agent_subgraph
 from calorch.nodes import (
     aggregate_briefing,
     approval_gate,
@@ -37,7 +37,7 @@ from calorch.nodes import (
     prefilter_keywords,
     scan_calendar,
 )
-from calorch.state import EventType, EVENT_TYPE_TO_AGENT, OrchestratorState
+from calorch.state import OrchestratorState
 
 log = logging.getLogger("calorch.graph")
 
@@ -61,11 +61,12 @@ def make_graph(
     builder.add_node("deliver_event", deliver_event)
     builder.add_node("aggregate_briefing", aggregate_briefing)
 
-    # Multi-agent subgraphs — one per event type
-    for ev_type in EventType:
-        agent_name = EVENT_TYPE_TO_AGENT[ev_type]
-        builder.add_node(agent_name, make_agent_subgraph(ev_type))
-        builder.add_edge(agent_name, "approval_gate")
+    # Multi-agent subgraphs — one per registered agent (see calorch.agents)
+    agent_names = []
+    for spec in iter_agents():
+        agent_names.append(spec.node_name)
+        builder.add_node(spec.node_name, make_agent_subgraph(spec.event_type))
+        builder.add_edge(spec.node_name, "approval_gate")
 
     # Linear front of the pipeline
     builder.add_edge(START, "scan_calendar")
@@ -76,7 +77,7 @@ def make_graph(
     builder.add_conditional_edges(
         "llm_classify",
         fan_out_prepare_events,
-        path_map=list(EVENT_TYPE_TO_AGENT.values()) + ["approval_gate"],
+        path_map=agent_names + ["approval_gate"],
     )
 
     # All agents converge at the approval gate (human-in-the-loop)

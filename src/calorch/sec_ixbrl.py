@@ -20,12 +20,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import httpx
 from cachetools import TTLCache
@@ -493,9 +492,9 @@ class SecIxbrlClient:
                 key=lambda e: (
                     e.get("end", ""),
                     0 if e.get("frame") is None else 1,
-                    0 if e.get("form") == "10-Q" else 1,
+                    1 if e.get("form") == "10-Q" else 0,
                 ),
-                reverse=(True, False, False),
+                reverse=True,
             )
             if not ranked:
                 continue

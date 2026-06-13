@@ -1,5 +1,17 @@
 # Azure Durable Functions — Applicability for calorch
 
+> **⚠️ Superseded — historical evaluation.** calorch has since **adopted**
+> the hybrid this document recommends: Azure Durable Functions as the
+> orchestrator (flow control, fan-out/fan-in, approval gate, durable timers)
+> with LangGraph multi-agent subgraphs running inside activities. The
+> "should we switch?" question below is kept for the reasoning and trade-off
+> analysis, but the answer in practice was **yes (hybrid)**. For the current
+> design see [`docs/architecture.md`](../architecture.md) and the deployment
+> guide [`deploy/azure-functions.md`](../../deploy/azure-functions.md). The
+> "poor fit" caveats below applied to a *wholesale* replacement that kept no
+> LangGraph; the shipped design keeps LangGraph exactly where determinism
+> isn't required (inside activities), which resolves them.
+>
 > **2026-06-02 update:** the implementation now splits preparation,
 > `approval_gate`, and delivery into separate LangGraph nodes. The gate uses
 > `interrupt()` and can persist through `PostgresSaver` when

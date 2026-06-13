@@ -48,33 +48,43 @@ class Settings:
 
     onedrive_drive_id: str | None
 
-    repo_backend: str            # "json" or "cosmos"
+    repo_backend: str            # "json" (local/dev) or "table" (production)
     repo_path: Path
-    cosmos_endpoint: str | None
-    cosmos_key: str | None
-    cosmos_db: str
-    cosmos_container: str
+    repo_table_name: str         # Azure Table for delivery-idempotency records
 
-    factset_api_key: str | None
-    bloomberg_blpapi_host: str | None
-    lseg_client_id: str | None
-    spglobal_api_key: str | None
-    tiingo_api_key: str | None
+    # Azure AI Search — institutional-knowledge RAG over the output corpus
+    search_endpoint: str | None
+    search_index: str
+    search_api_key: str | None
+    search_semantic_config: str | None
+    rag_top_k: int
+    knowledge_writeback: bool    # push each prepared analysis into the index
+
+    # Approval workflow — notify these addresses when a send run pauses
+    approver_emails: list[str]
+    approval_base_url: str | None  # override link base (default WEBSITE_HOSTNAME)
+
+    # LLM (OpenAI-compatible alt)
     opencode_go_api_key: str | None
     opencode_go_model: str
 
-    # Free data sources
-    fred_api_key: str | None
-    use_fred: bool
-    use_ixbrl_segments: bool
-    use_sec_efts: bool
-    use_fed_h15: bool
-
-    # SEC EDGAR
+    # ---- Data sources: SEC EDGAR + AlphaSense only ----
+    # SEC EDGAR (fundamentals, segments, filing full-text)
     sec_user_agent: str
     sec_cache_dir: Path
     sec_watchlist: list[str]
     sec_forms: list[str] | None
+    use_ixbrl_segments: bool
+    use_sec_efts: bool
+
+    # AlphaSense (qualitative: guidance, transcripts/expert calls, sentiment)
+    alphasense_api_key: str | None
+    alphasense_client_id: str | None
+    alphasense_client_secret: str | None
+    alphasense_username: str | None
+    alphasense_password: str | None
+    alphasense_base_url: str
+    use_alphasense: bool
 
     use_mocks: bool
     output_dir: Path
@@ -82,15 +92,7 @@ class Settings:
     langsmith_api_key: str | None
     langsmith_project: str
     langsmith_tracing: bool
-    checkpoint_postgres_uri: str | None
-    calorch_api_key: str | None
 
-    # Operational guards
-    run_timeout_seconds: float
-    max_concurrent_runs: int
-    max_request_bytes: int
-    cors_allowed_origins: list[str]
-    rate_limit_per_minute: int
     # Azure Blob Storage
     azure_storage_connection_string: str | None
     azure_storage_account_url: str | None
@@ -98,8 +100,6 @@ class Settings:
     blob_output_container: str
     blob_local_root: Path | None  # LocalBlobStore root when Azure not configured
     use_blob_providers: bool  # Read from blob instead of live API
-
-    audit_log_path: Path
 
 
 @lru_cache(maxsize=1)
@@ -117,39 +117,35 @@ def get_settings() -> Settings:
         onedrive_drive_id=_env("ONEDRIVE_DRIVE_ID"),
         repo_backend=(_env("REPO_BACKEND", "json") or "json").lower(),
         repo_path=Path(_env("REPO_PATH", "./out/repository.json") or "./out/repository.json"),
-        cosmos_endpoint=_env("COSMOS_ENDPOINT"),
-        cosmos_key=_env("COSMOS_KEY"),
-        cosmos_db=_env("COSMOS_DB", "calorch") or "calorch",
-        cosmos_container=_env("COSMOS_CONTAINER", "events") or "events",
-        factset_api_key=_env("FACTSET_API_KEY"),
-        bloomberg_blpapi_host=_env("BLOOMBERG_BLPAPI_HOST"),
-        lseg_client_id=_env("LSEG_CLIENT_ID"),
-        spglobal_api_key=_env("SPGLOBAL_API_KEY"),
-        tiingo_api_key=_env("TIINGO_API_KEY"),
+        repo_table_name=_env("REPO_TABLE_NAME", "calorchdelivery") or "calorchdelivery",
+        search_endpoint=_env("AZURE_SEARCH_ENDPOINT"),
+        search_index=_env("AZURE_SEARCH_INDEX", "calorch-knowledge") or "calorch-knowledge",
+        search_api_key=_env("AZURE_SEARCH_API_KEY"),
+        search_semantic_config=_env("AZURE_SEARCH_SEMANTIC_CONFIG"),
+        rag_top_k=int(_env("RAG_TOP_K", "4") or "4"),
+        knowledge_writeback=_bool("KNOWLEDGE_WRITEBACK", True),
+        approver_emails=_csv("APPROVER_EMAILS", ""),
+        approval_base_url=_env("APPROVAL_BASE_URL"),
         opencode_go_api_key=_env("OPENCODE_GO_API_KEY"),
         opencode_go_model=_env("OPENCODE_GO_MODEL", "glm-5.1") or "glm-5.1",
-        fred_api_key=_env("FRED_API_KEY"),
-        use_fred=_bool("USE_FRED", True),
-        use_ixbrl_segments=_bool("USE_IXBRL_SEGMENTS", True),
-        use_sec_efts=_bool("USE_SEC_EFTS", True),
-        use_fed_h15=_bool("USE_FED_H15", True),
         sec_user_agent=_env("SEC_USER_AGENT", "Calorch Research calorch@example.com") or "Calorch Research calorch@example.com",
         sec_cache_dir=Path(_env("SEC_CACHE_DIR", "./.cache/sec") or "./.cache/sec"),
         sec_watchlist=_csv("SEC_WATCHLIST", "AAPL,MSFT,NVDA,GOOGL,AMZN,META,AVGO,JPM,TSLA,WMT"),
         sec_forms=_csv("SEC_FORMS", None) or None,
+        use_ixbrl_segments=_bool("USE_IXBRL_SEGMENTS", True),
+        use_sec_efts=_bool("USE_SEC_EFTS", True),
+        alphasense_api_key=_env("ALPHASENSE_API_KEY"),
+        alphasense_client_id=_env("ALPHASENSE_CLIENT_ID"),
+        alphasense_client_secret=_env("ALPHASENSE_CLIENT_SECRET"),
+        alphasense_username=_env("ALPHASENSE_USERNAME"),
+        alphasense_password=_env("ALPHASENSE_PASSWORD"),
+        alphasense_base_url=_env("ALPHASENSE_BASE_URL", "https://api.alpha-sense.com") or "https://api.alpha-sense.com",
+        use_alphasense=_bool("USE_ALPHASENSE", True),
         use_mocks=_bool("USE_MOCKS", True),
         output_dir=Path(_env("OUTPUT_DIR", "./out") or "./out"),
         langsmith_api_key=_env("LANGSMITH_API_KEY"),
         langsmith_project=_env("LANGSMITH_PROJECT", "calorch") or "calorch",
         langsmith_tracing=_bool("LANGSMITH_TRACING", False),
-        checkpoint_postgres_uri=_env("CHECKPOINT_POSTGRES_URI"),
-        calorch_api_key=_env("CALORCH_API_KEY"),
-        run_timeout_seconds=float(_env("RUN_TIMEOUT_SECONDS", "300") or "300"),
-        max_concurrent_runs=int(_env("MAX_CONCURRENT_RUNS", "3") or "3"),
-        max_request_bytes=int(_env("MAX_REQUEST_BYTES", "1048576") or "1048576"),
-        cors_allowed_origins=_csv("CORS_ALLOWED_ORIGINS", ""),
-        rate_limit_per_minute=int(_env("RATE_LIMIT_PER_MINUTE", "30") or "30"),
-        audit_log_path=Path(_env("AUDIT_LOG_PATH", "./out/audit.jsonl") or "./out/audit.jsonl"),
         azure_storage_connection_string=_env("AZURE_STORAGE_CONNECTION_STRING"),
         azure_storage_account_url=_env("AZURE_STORAGE_ACCOUNT_URL"),
         blob_input_container=_env("BLOB_INPUT_CONTAINER", "calorch-inputs") or "calorch-inputs",

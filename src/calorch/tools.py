@@ -15,15 +15,18 @@ import shutil
 import threading
 import time
 import uuid
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+from collections.abc import Iterable
 from urllib.parse import quote
 
 import httpx
 
 from calorch.config import Settings
+
+if TYPE_CHECKING:
+    from calorch.providers import ProviderBundle
 from calorch.state import CalendarEvent, OrchestratorError
 
 
@@ -100,6 +103,9 @@ class _GraphClientReal:
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Call Graph with bounded retries for throttling and transient failures."""
         base_headers = kwargs.pop("headers", {})
+        # Stable per-logical-request id so a retried POST (e.g. createDraft) can
+        # be deduplicated server-side rather than creating a duplicate.
+        base_headers.setdefault("client-request-id", str(uuid.uuid4()))
         last_error: Exception | None = None
         for attempt in range(4):
             headers = {**self._headers(), **base_headers}
@@ -112,6 +118,8 @@ class _GraphClientReal:
                 time.sleep(min(2**attempt, 8))
                 continue
             if response.status_code == 401 and attempt < 3:
+                # Benign even without the token lock: a concurrent refresh just
+                # re-acquires; worst case is one extra token fetch.
                 self._token = None
                 continue
             if response.status_code in {429, 500, 502, 503, 504} and attempt < 3:
@@ -126,8 +134,8 @@ class _GraphClientReal:
     def list_events(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
         url = f"{self._GRAPH}/users/{self._s.graph_user_id}/calendar/calendarView"
         params = {
-            "startDateTime": start.astimezone(timezone.utc).isoformat(),
-            "endDateTime": end.astimezone(timezone.utc).isoformat(),
+            "startDateTime": start.astimezone(UTC).isoformat(),
+            "endDateTime": end.astimezone(UTC).isoformat(),
             "$select": "id,subject,bodyPreview,start,end,organizer,attendees,location,isOnlineMeeting,webLink",
             "$top": "100",
         }
@@ -242,7 +250,7 @@ class _GraphClientReal:
 class MockGraphClient:
     """In-memory stand-in for Microsoft Graph.
 
-    Reads `data/seed_events.json` (if present) and returns copies of the
+    Reads the packaged `calorch/data/seed_events.json` (if present) and returns copies of the
     fixture events, so the graph has something to chew on in demo mode.
     """
 
@@ -325,20 +333,18 @@ def _parse_dt(s: Any) -> datetime:
 
 
 def _load_default_fixtures() -> list[dict[str, Any]]:
-    # Walk up from src/calorch/tools.py to find the data/ directory in the
-    # project root, regardless of the current working directory.
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "data" / "seed_events.json"
-        if candidate.exists():
-            return json.loads(candidate.read_text(encoding="utf-8"))
+    # Seed events ship inside the package (pyproject package-data), so they
+    # resolve from both a source checkout and a pip install.
+    candidate = Path(__file__).resolve().parent / "data" / "seed_events.json"
+    if candidate.exists():
+        return json.loads(candidate.read_text(encoding="utf-8"))
     return []
 
 
 # ---------------------------------------------------------------------------
 # OneDrive
 # ---------------------------------------------------------------------------
-def make_onedrive_client(settings: Settings) -> "OneDriveClient":
+def make_onedrive_client(settings: Settings) -> OneDriveClient:
     if settings.use_mocks or not settings.onedrive_drive_id:
         return LocalOneDriveClient(settings.output_dir / "onedrive")
     _require_graph_settings(settings)
@@ -380,7 +386,7 @@ class GraphOneDriveClient:
 
 
 # ---------------------------------------------------------------------------
-# Repository (JSON or Cosmos-shaped)
+# Repository (JSON for local/dev, Azure Table for production)
 # ---------------------------------------------------------------------------
 class Repository(Protocol):
     def upsert(self, event_id: str, doc: dict[str, Any]) -> None: ...
@@ -393,7 +399,7 @@ class JsonRepository:
 
     Parallel per-event workers (LangGraph Send fan-out) all hit this
     instance concurrently, so a single lock guards read-modify-write.
-    For Cosmos, the SDK handles concurrency on the server.
+    For Azure Table, the service handles concurrency server-side.
     """
 
     def __init__(self, path: Path) -> None:
@@ -434,102 +440,128 @@ class JsonRepository:
         return None
 
 
-class CosmosRepository:
-    """Cosmos DB repository using ``event_id`` as the partition key."""
+# Table Storage keys forbid / \ # ? and control chars; sanitise event ids.
+_TABLE_KEY_BAD = re.compile(r"[/\\#?\x00-\x1f\x7f-\x9f]")
 
-    def __init__(self, endpoint: str, key: str, db: str, container: str) -> None:
-        if not endpoint or not key:
-            raise OrchestratorError("COSMOS_ENDPOINT and COSMOS_KEY are required for REPO_BACKEND=cosmos.")
+
+def _table_key(event_id: str) -> str:
+    return _TABLE_KEY_BAD.sub("_", event_id) or "_"
+
+
+class TableRepository:
+    """Azure Table Storage repository for delivery-idempotency records.
+
+    One entity per event: ``PartitionKey = sanitised event_id``,
+    ``RowKey = "delivery"``. Point reads/writes only — there is never more
+    than one writer per event (each event is delivered by exactly one
+    activity), so no cross-key contention. Backed by the function app's
+    existing storage account; ~100x cheaper than Cosmos for this workload.
+
+    Nested values are JSON-encoded into a single ``_doc`` column because
+    Table entities are flat and typed.
+    """
+
+    _ROW_KEY = "delivery"
+
+    def __init__(
+        self,
+        table_name: str,
+        *,
+        connection_string: str | None = None,
+        account_url: str | None = None,
+    ) -> None:
         try:
-            from azure.cosmos import CosmosClient
+            from azure.data.tables import TableClient, UpdateMode
         except ImportError as exc:  # pragma: no cover - exercised in deployed image
             raise OrchestratorError(
-                "REPO_BACKEND=cosmos requires the `azure-cosmos` package."
+                "REPO_BACKEND=table requires the `azure-data-tables` package "
+                "(pip install calorch[azure])."
             ) from exc
-        client = CosmosClient(endpoint, credential=key)
-        database = client.get_database_client(db)
-        self._container = database.get_container_client(container)
+        self._update_mode = UpdateMode.REPLACE
+
+        if connection_string:
+            self._table = TableClient.from_connection_string(connection_string, table_name=table_name)
+        elif account_url:
+            from azure.identity import DefaultAzureCredential
+
+            self._table = TableClient(
+                endpoint=account_url, table_name=table_name, credential=DefaultAzureCredential()
+            )
+        else:
+            raise OrchestratorError(
+                "REPO_BACKEND=table requires AZURE_STORAGE_CONNECTION_STRING or "
+                "AZURE_STORAGE_ACCOUNT_URL."
+            )
+        try:
+            self._table.create_table()
+        except Exception:  # noqa: BLE001 - already exists
+            pass
 
     def upsert(self, event_id: str, doc: dict[str, Any]) -> None:
+        # Read-merge-replace is safe here because each event_id is written by
+        # exactly one delivery activity (no concurrent writers to a key).
         existing = self.get(event_id) or {}
-        self._container.upsert_item(
-            {
-                **existing,
-                **doc,
-                "id": event_id,
-                "event_id": event_id,
-                "updated_at": _now().isoformat(),
-            }
-        )
-
-    def all(self) -> list[dict[str, Any]]:
-        return list(
-            self._container.query_items(
-                query="SELECT * FROM c",
-                enable_cross_partition_query=True,
-            )
-        )
+        merged = {**existing, **doc, "event_id": event_id, "updated_at": _now().isoformat()}
+        entity = {
+            "PartitionKey": _table_key(event_id),
+            "RowKey": self._ROW_KEY,
+            "_doc": json.dumps(merged, default=str),
+        }
+        self._table.upsert_entity(entity, mode=self._update_mode)
 
     def get(self, event_id: str) -> dict[str, Any] | None:
         try:
-            return self._container.read_item(item=event_id, partition_key=event_id)
-        except Exception as exc:
-            try:
-                from azure.cosmos.exceptions import CosmosResourceNotFoundError
-            except ImportError:  # pragma: no cover - import already validated
-                raise
-            if isinstance(exc, CosmosResourceNotFoundError):
-                return None
-            raise
+            from azure.core.exceptions import ResourceNotFoundError
+        except ImportError:  # pragma: no cover
+            ResourceNotFoundError = Exception  # type: ignore[assignment]
+        try:
+            entity = self._table.get_entity(partition_key=_table_key(event_id), row_key=self._ROW_KEY)
+        except ResourceNotFoundError:
+            return None
+        raw = entity.get("_doc")
+        return json.loads(raw) if raw else None
+
+    def all(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for entity in self._table.list_entities():
+            raw = entity.get("_doc")
+            if raw:
+                rows.append(json.loads(raw))
+        return rows
 
 
 def make_repository(settings: Settings) -> Repository:
-    if settings.repo_backend == "cosmos" and not settings.use_mocks:
-        return CosmosRepository(
-            settings.cosmos_endpoint or "",
-            settings.cosmos_key or "",
-            settings.cosmos_db,
-            settings.cosmos_container,
+    if settings.repo_backend == "table" and not settings.use_mocks:
+        return TableRepository(
+            settings.repo_table_name,
+            connection_string=settings.azure_storage_connection_string,
+            account_url=settings.azure_storage_account_url,
         )
     return JsonRepository(settings.repo_path)
 
 
 # ---------------------------------------------------------------------------
-# Enterprise data (FactSet / Bloomberg / LSEG / S&P)
+# Enterprise data (SEC EDGAR XBRL company facts)
 # ---------------------------------------------------------------------------
 class EnterpriseDataClient(Protocol):
     def fetch(self, topic: str, *, tickers: Iterable[str] = ()) -> dict[str, Any]: ...
 
 
-@dataclass
-class _FactSetFacts:
-    consensus: dict[str, Any]
-    guidance: str
-    transcript_excerpt: str
-
-
 class _EnterpriseDataClientImpl:
-    """Consolidated FactSet/Bloomberg/LSEG/S&P/SEC adapter.
+    """SEC EDGAR enterprise-data adapter.
 
-    In demo mode it returns deterministic synthetic data shaped like what a
-    real provider would return. In production each branch hits its SDK
-    (Open:FactSet, BLPAPI, lseg-data, Xpressfeed) and the `httpx` async
-    client is used for HTTP fallbacks. SEC XBRL companyfacts are merged
-    in whenever a real SEC client is available, so the briefing table
-    always carries actual revenue / EPS / net income.
+    Pulls real SEC XBRL companyfacts (revenue / EPS / net income) whenever a
+    SEC client is available, so the briefing table carries actual numbers; in
+    demo mode (or when SEC is unavailable) it returns deterministic synthetic
+    data of the same shape. The richer qualitative layer (guidance,
+    transcripts, sentiment) comes from AlphaSense via the provider bundle, not
+    this client.
     """
 
     def __init__(self, settings: Settings, sec: Any = None) -> None:
         self._s = settings
         self._sec = sec
-        has_real_source = bool(
-            settings.factset_api_key
-            or settings.bloomberg_blpapi_host
-            or settings.lseg_client_id
-            or settings.spglobal_api_key
-            or sec is not None
-        )
-        self._mock = settings.use_mocks or not has_real_source
+        self._mock = settings.use_mocks or sec is None
 
     def fetch(self, topic: str, *, tickers: Iterable[str] = ()) -> dict[str, Any]:
         tickers = [t.upper() for t in tickers] or ["AAPL", "MSFT"]
@@ -543,11 +575,9 @@ class _EnterpriseDataClientImpl:
                         sec_snap[t] = facts
                 except Exception:
                     continue
-        if self._mock and not sec_snap:
-            return self._mock_payload(topic, tickers)
         if sec_snap:
             return self._sec_payload(topic, tickers, sec_snap)
-        return self._live_payload(topic, tickers)
+        return self._mock_payload(topic, tickers)
 
     def _sec_payload(
         self, topic: str, tickers: list[str], sec_snap: dict[str, dict[str, Any]]
@@ -600,37 +630,6 @@ class _EnterpriseDataClientImpl:
             ),
         }
 
-    def _live_payload(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        # Each provider is hit conditionally. Only FactSet is shown; the
-        # rest follow the same pattern (BLPAPI, lseg-data, Xpressfeed).
-        out: dict[str, Any] = {"source": "live", "topic": topic, "as_of": _now().isoformat()}
-        if self._s.factset_api_key:
-            out["factset"] = self._factset(topic, tickers)
-        if self._s.bloomberg_blpapi_host:
-            out["bloomberg"] = self._bloomberg(topic, tickers)
-        if self._s.lseg_client_id:
-            out["lseg"] = self._lseg(topic, tickers)
-        if self._s.spglobal_api_key:
-            out["sp_capital_iq"] = self._spcapitaliq(topic, tickers)
-        return out
-
-    def _factset(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        # Real call would be:
-        #   from factset import FactSet
-        #   client = FactSet(api_key=self._s.factset_api_key)
-        #   return client.fundamentals(tickers, fields=("FE_EST_EPS", "FE_EST_REV"))
-        return {"vendor": "factset", "endpoint": "Open:FactSet fundamentals", "tickers": tickers, "topic": topic}
-
-    def _bloomberg(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        return {"vendor": "bloomberg", "endpoint": "BLPAPI //BQL", "tickers": tickers, "topic": topic}
-
-    def _lseg(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        return {"vendor": "lseg", "endpoint": "Datastream RDTH", "tickers": tickers, "topic": topic}
-
-    def _spcapitaliq(self, topic: str, tickers: list[str]) -> dict[str, Any]:
-        return {"vendor": "sp_capital_iq", "endpoint": "Xpressfeed v3", "tickers": tickers, "topic": topic}
-
-
 def make_enterprise_data_client(settings: Settings) -> EnterpriseDataClient:
     sec = None
     if settings.use_mocks is False or _env_true("USE_SEC", True):
@@ -657,7 +656,7 @@ def _env_true(name: str, default: bool) -> bool:
 # Helpers
 # ---------------------------------------------------------------------------
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _require_graph_settings(settings: Settings) -> None:
@@ -725,7 +724,6 @@ __all__ = [
     "GraphClient",
     "MockGraphClient",
     "make_graph_client",
-    "make_sec_calendar_client",
     "make_cik_lookup",
     "OneDriveClient",
     "LocalOneDriveClient",
@@ -733,7 +731,7 @@ __all__ = [
     "make_onedrive_client",
     "Repository",
     "JsonRepository",
-    "CosmosRepository",
+    "TableRepository",
     "make_repository",
     "EnterpriseDataClient",
     "make_enterprise_data_client",
@@ -743,7 +741,7 @@ __all__ = [
 ]
 
 
-def make_cik_lookup(settings: "Settings"):
+def make_cik_lookup(settings: Settings):
     """Build a callable ``cik_for(ticker) -> str | None``.
 
     This is the smallest piece of SEC we need to do ticker → CIK
@@ -762,18 +760,15 @@ def make_cik_lookup(settings: "Settings"):
 # ---------------------------------------------------------------------------
 # Provider bundle — config-driven dispatch for data sources.
 # ---------------------------------------------------------------------------
-def make_providers(settings: Settings) -> "ProviderBundle":  # type: ignore[name-defined]
+def make_providers(settings: Settings) -> ProviderBundle:
     """Build the active provider bundle for this run.
 
-    Resolution order per provider:
-      * Macro:     FRED (preferred, falls back to no-key) + FOMC H.15
-      * Segments:  SEC iXBRL (real parser) or stub
-      * Narrative: SEC EFTS (real search) or stub
-      * Price:     stub only (no free enterprise-grade source)
-      * Consensus: stub only (no free source — requires terminal)
+    Sources:
+      * SEC EDGAR  — fundamentals + segments (iXBRL), filing search (EFTS)
+      * AlphaSense — narrative/guidance, transcripts/expert calls, sentiment
 
     The bundle is cheap to construct (no network); the underlying clients
-    cache per-run. Swap to a paid provider by setting the relevant env var.
+    cache per-run. See ``calorch.providers.build_providers``.
     """
     from calorch.providers import build_providers as _build
 

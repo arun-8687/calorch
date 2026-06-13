@@ -2,139 +2,132 @@
 
 > **Enterprise-Grade Calendar-Driven Intelligent Workflow Orchestrator**
 >
-> LangGraph + Azure Container Apps engine for equity research prep-pack automation.
-> Ingests Outlook calendar events, classifies them into 8 research workflows, enriches
-> with live SEC EDGAR / FRED / FOMC H.15 data, generates DOCX briefs with LLM-powered
-> narrative, and delivers HTML emails via Microsoft Graph — all in parallel.
+> **Azure Durable Functions** orchestrator with **LangGraph** multi-agent
+> subgraphs for equity research prep-pack automation. Ingests Outlook
+> calendar events, classifies them into 8 research workflows, enriches with
+> live SEC EDGAR (fundamentals/segments/filings) and AlphaSense
+> (guidance/transcripts/sentiment) data, generates DOCX briefs with
+> LLM-powered narrative, and delivers HTML emails via Microsoft Graph — all
+> fanned out in parallel, with a human-in-the-loop approval gate.
 
 ```mermaid
 flowchart TB
-    subgraph INGEST["Calendar Ingestion"]
-        GRAPH["Microsoft Graph API<br/>Outlook Calendar"] --> SCAN["scan_calendar<br/>list_events(start, end)"]
+    subgraph TRIGGERS["Triggers"]
+        TIMER["Timer trigger<br/>CRON_SCHEDULE · Mon 09:00 UTC"]
+        HTTPRUN["POST /api/run"]
+        HTTPAPP["POST /api/approval/{id}"]
     end
 
-    subgraph CLASSIFY["Classification (2-pass)"]
-        SCAN --> KW["prefilter_keywords<br/>Pass 1 · deterministic"]
-        KW --> LLM_CLASS["llm_classify<br/>Pass 2 · model-agnostic JSON"]
+    subgraph FUNC["Azure Function App · Python 3.11 · Flex Consumption"]
+        ORC["calorch_orchestrator<br/>Durable Functions · deterministic replay"]
+        subgraph SEQ["Orchestrated activities (checkpointed to task hub)"]
+            A1["activity_scan_calendar"]
+            A2["activity_classify<br/>keywords + LLM"]
+            A3["activity_agent × N<br/>(task_all · parallel)"]
+            GATE["approval gate<br/>wait_for_external_event ⟂ durable timer"]
+            A4["activity_deliver × N<br/>(task_all · parallel)"]
+            A5["activity_aggregate_briefing"]
+        end
+        ORC --> A1 --> A2 --> A3 --> GATE --> A4 --> A5
     end
 
-    subgraph ENRICH["Enrichment (8-way parallel fan-out via Send API)"]
-        LLM_CLASS --> FANOUT["fan_out_prepare_events"]
-        FANOUT --> P1["prepare_event · ev-001"]
-        FANOUT --> P2["prepare_event · ev-002"]
-        FANOUT --> PN["prepare_event · ev-00N"]
+    subgraph AGENT["Inside activity_agent — LangGraph"]
+        REG["agent registry<br/>make_agent_subgraph(event_type)"]
+        SUB["prepare node<br/>data → analysis → DOCX/HTML"]
+        REG --> SUB
     end
 
-    subgraph PROVIDERS["Live Data Providers"]
-        direction TB
-        IXBRL["SEC iXBRL Fundamentals<br/>Revenue · EPS · Margins<br/>Balance Sheet · Cash Flow"]
-        SEG["SEC iXBRL Segments<br/>Product + Geographic"]
-        EFTS["SEC EFTS<br/>Guidance · Risk Factors"]
-        FRED["FRED<br/>VIX · S&P 500 · Oil · Gold · BTC"]
-        H15["FOMC H.15<br/>Treasury Curve · Fed Funds"]
-        TIINGO["Tiingo<br/>EOD Price · Consensus"]
+    subgraph EXTERNAL["External services"]
+        M365["Microsoft Graph<br/>Outlook · Mail · OneDrive"]
+        OPENAI["Azure OpenAI<br/>classify + enrich"]
+        SECAS["SEC EDGAR · AlphaSense"]
+        SEARCH["Azure AI Search<br/>institutional-knowledge RAG"]
     end
 
-    subgraph LLM["LLM Enrichment"]
-        PROMPT["Template-driven prompts<br/>with grounding rule"]
-        FILTER["Thinking-block filter<br/>150+ phrase blacklist"]
-        MODEL["deepseek-v4-pro · kimi-k2.6<br/>glm-5.1 · Azure OpenAI"]
+    subgraph AZURE["Azure platform"]
+        STG[("Storage account<br/>task hub + Table (idempotency) + blob in/out")]
+        AI[("Application Insights")]
+        KV[("Key Vault<br/>secrets")]
     end
 
-    subgraph TEMPLATES["Template Engine"]
-        TPL["8 JSON templates<br/>data/templates/*.json"]
-        ENGINE["TemplateEngine<br/>JSON → EventAnalysis"]
-    end
-
-    subgraph RENDER["DOCX + HTML Rendering"]
-        DOCX["render_docx<br/>python-docx · prep_scanner format"]
-        HTML["render_html_email<br/>inline CSS · responsive"]
-    end
-
-    subgraph DELIVER["Delivery"]
-        DOCX --> GATE["approval_gate<br/>interrupt() before send"]
-        HTML --> GATE
-        GATE --> SEND["deliver_event<br/>Graph draft · OneDrive · Repository"]
-    end
-
-    subgraph STORE["Persistence"]
-        COSMOS[("Cosmos DB<br/>events container")]
-        PG[("PostgreSQL<br/>LangGraph checkpoints")]
-        ONEDRIVE[("OneDrive<br/>DOCX archive")]
-        JSON[("JSON Repository<br/>local fallback")]
-    end
-
-    subgraph AZURE["Azure Container Apps"]
-        ACA["Consumption tier<br/>scale-to-zero<br/>~$0.30/mo"]
-        ACR[("ACR Basic<br/>$5/mo")]
-    end
-
-    PROVIDERS --> P1
-    PROVIDERS --> P2
-    PROVIDERS --> PN
-    LLM --> P1
-    LLM --> P2
-    LLM --> PN
-    TEMPLATES --> P1
-    TEMPLATES --> P2
-    TEMPLATES --> PN
-    P1 --> DOCX
-    P2 --> DOCX
-    PN --> DOCX
-    SEND --> COSMOS
-    SEND --> ONEDRIVE
-    SEND --> PG
-    SEND --> JSON
-    ACA --> ACR
+    TIMER --> ORC
+    HTTPRUN --> ORC
+    HTTPAPP -.->|raise_event| GATE
+    A3 -.-> AGENT
+    A1 <--> M365
+    A2 <--> OPENAI
+    SUB <--> SECAS
+    SUB <-->|retrieve + index| SEARCH
+    SUB <--> OPENAI
+    A4 <--> M365
+    A4 --> STG
+    ORC <--> STG
+    SUB --> STG
+    FUNC -.-> AI
+    KV -.-> FUNC
 ```
+
+The orchestrator (Durable Functions) owns flow control — sequencing,
+parallel fan-out/fan-in, retries, the approval gate, durable timers — and
+stays deterministic (no I/O, clock from `context.current_utc_datetime`).
+All side effects live in **activities**, which the host checkpoints and
+retries. The agent work runs inside `activity_agent` as a compiled
+LangGraph subgraph selected from the [agent registry](#adding-a-new-agent).
 
 ---
 
 ## Enterprise Data Architecture
 
-All data flows through a **Protocol-based provider layer** (`src/calorch/providers.py`). The renderer never knows which implementation is wired — swapping Tiingo for Refinitiv or Bloomberg is a config change, not a code change.
+All data flows through a **Protocol-based provider layer** (`src/calorch/providers.py`), backed by exactly two sources: **SEC EDGAR** (structured numbers) and **AlphaSense** (qualitative). The renderer never knows which implementation is wired.
 
-### Provider Priority Chain
+### Sources
 
-| Priority | Source | Data | Authentication | SLA |
-|----------|--------|------|---------------|-----|
-| 1 | **SEC iXBRL Company Facts** | Revenue, EPS, gross/operating/net margins, ROE, ROA, assets, liabilities, cash, debt, capex, R&D, shares outstanding | None (free, ToS-compliant) | Best-effort |
-| 2 | **SEC iXBRL Instance Docs** | Product segment revenue, geographic revenue (parsed from inline XBRL on 10-Q/10-K) | None (free) | Best-effort |
-| 3 | **SEC EFTS** | Full-text filing search — guidance, outlook, risk factor excerpts | None (free) | Best-effort |
-| 4 | **FOMC H.15** | Full Treasury yield curve (1M→30Y) + effective federal funds rate | None (free, scraped) | Daily |
-| 5 | **FRED** | VIX, S&P 500, WTI oil, gold, BTC, CPI, unemployment, USD/EUR | Optional key (free) | Real-time |
-| 6 | **Tiingo** | EOD price, market cap, analyst consensus, price targets | API key ($50/mo) | Delayed |
+| Provider slot | Source | Data | Authentication |
+|----------|--------|------|---------------|
+| `fundamentals` | **SEC iXBRL Company Facts** | Revenue, EPS, margins, ROE/ROA, cash, debt | None (free, ToS-compliant) |
+| `segments` | **SEC iXBRL Instance Docs** | Product + geographic revenue splits (10-Q/10-K) | None (free) |
+| `filings` | **SEC EFTS** | Full-text filing search — guidance excerpts | None (free) |
+| `narrative` | **AlphaSense** | Guidance / outlook across filings + transcripts | API key (OAuth2) |
+| `transcripts` | **AlphaSense** | Earnings-call / expert-call transcript matches | API key |
+| `sentiment` | **AlphaSense** | Document-level sentiment (-1..1) per ticker | API key |
+
+> There is no price, consensus, or macro provider — those needed third-party
+> market-data vendors (Tiingo / FRED / FOMC H.15) that are out of scope. Those
+> fields render as "—".
 
 ### Provider Contract
 
 ```python
-class PriceProvider(Protocol):
-    def quote(self, ticker: str) -> dict[str, Any]: ...
-
-class ConsensusProvider(Protocol):
-    def estimates(self, ticker: str) -> dict[str, Any]: ...
-    def recommendations(self, ticker: str) -> dict[str, Any]: ...
-
 class FundamentalsProvider(Protocol):
     def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]: ...
-
-class MacroProvider(Protocol):
-    def snapshot(self) -> dict[str, dict[str, Any]]: ...
 
 class SegmentProvider(Protocol):
     def latest_segments(self, cik: str, ticker: str, *, axis: str = "product") -> list[dict[str, Any]]: ...
 
-class NarrativeProvider(Protocol):
+class FilingsProvider(Protocol):       # SEC EFTS
     def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
+
+class NarrativeProvider(Protocol):     # AlphaSense
+    def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
+
+class TranscriptProvider(Protocol):    # AlphaSense
+    def transcript_hits(self, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]: ...
+
+class SentimentProvider(Protocol):     # AlphaSense
+    def sentiment(self, ticker: str) -> dict[str, Any]: ...
 ```
 
-When a provider lacks credentials, it returns empty data with `{"note": "TIINGO_API_KEY not set", "source": "none"}` — never an exception, never a stub, never a mock.
+In production the orchestrator reads **pre-ingested** provider data from
+Azure Blob Storage (`USE_BLOB_PROVIDERS=true`); a separate ingestion
+pipeline (`calorch.data_ingestion`) populates `calorch-inputs` on its own
+schedule. When a source lacks credentials it returns empty data with a
+``note`` — never an exception, never a stub leaking into output.
 
 ---
 
 ## Template System
 
-All 8 event types are defined as JSON templates (`data/templates/`) modeled on real equity research prep packs. Zero hardcoded content in Python.
+All 8 event types are defined as JSON templates (`src/calorch/data/templates/`, shipped inside the package) modeled on real equity research prep packs. Zero hardcoded content in Python.
 
 ```json
 {
@@ -162,7 +155,7 @@ All 8 event types are defined as JSON templates (`data/templates/`) modeled on r
 ```
 
 **Template Engine** (`src/calorch/templates.py`):
-- `load_template(event_type)` — loads JSON template
+- `load_template(name | EventType | Path)` — loads a built-in template or an explicit file path (for out-of-tree agents)
 - `TemplateEngine.build(context, data_tables)` — resolves variables, dispatches LLM calls, builds `EventAnalysis`
 
 ---
@@ -183,31 +176,97 @@ Uses `llm.invoke()` with a JSON prompt — no `response_format` / JSON mode requ
 | **Thinking-Block Filter** | 150+ phrase blacklist + 70% threshold. If model outputs reasoning, response is discarded and template fallback is used |
 | **Fallback Content** | Every template section has data-driven fallback — no blank sections |
 
+### Institutional-knowledge RAG (Azure AI Search)
+
+When `AZURE_SEARCH_ENDPOINT` is configured, enrichment LLM calls are
+augmented with retrieved prior research (`calorch.knowledge`):
+
+- **Retrieve** — before each enrichment call, `RagChatModel` queries Azure
+  AI Search with the section prompt (filtered to the event's ticker) and
+  injects the top-K passages into the prompt as *additional provided
+  context*, so the model grounds new briefs in the firm's own research
+  history without violating the no-training-data rule.
+- **Index** — after each event's analysis is built, its structured record
+  (title + section text + tickers + confidence) is upserted into the
+  index, so the corpus grows with every run (`KNOWLEDGE_WRITEBACK`).
+
+It's a *derived* index over the `calorch-outputs` blob corpus, never a
+system of record. Unconfigured → `NullKnowledgeStore` → the whole feature
+is a zero-overhead no-op (the default in local/demo runs). Retrieval and
+indexing are both best-effort: a Search outage degrades to un-augmented
+enrichment, never a failed run.
+
 ---
 
-## Graph Pipeline
+## Orchestration — Azure Durable Functions
+
+The production orchestrator is an Azure Durable Functions app
+(`function_app.py` → `calorch.durable`). The orchestrator function
+sequences activities; the parallel stages use `task_all`; the approval
+gate races an external event against a durable timer.
 
 ```
-START
-  → scan_calendar          (Microsoft Graph API — Outlook calendar only)
-  → prefilter_keywords     (deterministic keyword scoring, zero-cost)
-  → llm_classify           (model-agnostic JSON classification)
-  → fan_out_prepare_events (LangGraph Send API — 8-way parallel)
-  → approval_gate          (human-in-the-loop interrupt)
-  → fan_out_deliver_event  (draft email, upload to OneDrive, persist to Cosmos)
-  → aggregate_briefing     (cross-event weekly summary)
-  → END
+calorch_orchestrator                       (deterministic — no I/O, no wall clock)
+  → activity_scan_calendar                 (Microsoft Graph — Outlook calendar)
+  → activity_classify                      (Pass 1 keywords/SEC form + Pass 2 LLM JSON)
+  → task_all(activity_agent × N)           (parallel — one LangGraph agent per event)
+  → approval gate                          (wait_for_external_event ⟂ durable timer, 24h)
+  → task_all(activity_deliver × N)         (parallel — draft/send, OneDrive, repository)
+  → activity_aggregate_briefing            (cross-event weekly summary → blob)
 ```
 
-| Node | Responsibility | Dependencies |
-|------|---------------|--------------|
-| `scan_calendar` | Pull events from Graph `/me/calendar/calendarView` | GraphClient, Entra ID |
-| `prefilter_keywords` | Score each event against 8 keyword sets | None (pure Python) |
-| `llm_classify` | LLM classification with JSON output | LLM (Opencode Go / Azure) |
-| `prepare_event` | Enrich event → DOCX → HTML email | All 6 providers, LLM, TemplateEngine |
-| `approval_gate` | Pause graph for human review | LangGraph `interrupt()` |
-| `deliver_event` | Send/draft email, patch calendar, persist | GraphClient, OneDriveClient, Repository |
-| `aggregate_briefing` | Generate `weekly.html` from all events | Repository |
+### Functions in the app (13)
+
+| Function | Trigger | Responsibility |
+|---|---|---|
+| `calorch_orchestrator` | orchestration | Sequences the workflow above; deterministic replay |
+| `timer_start` | timer (`CRON_SCHEDULE`) | Starts a scheduled run (default Mon 09:00 UTC, 7-day lookahead) |
+| `http_start` | `POST /api/run` | Starts a run on demand; returns the status-query URLs |
+| `http_approval` | `POST /api/approval/{id}` | Raises the `approval` event (function-key auth; for API/automation) |
+| `http_status` | `GET /api/status/{id}` | Reports run status counts (no bodies) |
+| `http_review` | `GET /api/review/{id}?token=…` | Approval review page — renders the prepared previews (anonymous + one-time token) |
+| `http_decision` | `POST /api/decision/{id}` | Records the approve/reject decision from the review page (anonymous + token) |
+| `activity_scan_calendar` | activity | Pulls calendar events from Graph |
+| `activity_classify` | activity | Two-pass classification (keywords/SEC form + LLM) |
+| `activity_agent` | activity | Runs the LangGraph agent subgraph for one event |
+| `activity_deliver` | activity | Idempotent draft/send + calendar patch + repository upsert |
+| `activity_aggregate_briefing` | activity | Builds the weekly HTML briefing |
+| `activity_request_approval` | activity | Emails approvers the run summary + review-page link |
+
+### Approval workflow
+
+When a send run pauses at the gate, the addresses in `APPROVER_EMAILS` get
+an email (via Graph) summarising the prepared emails, with one link to the
+**review page**: the actual email previews rendered inline, plus Approve /
+Reject buttons. The link carries a **per-run one-time token** (its SHA-256
+lives in the orchestration's `custom_status`) — no function key in any
+email, and the token dies with the run. The emailed link is a read-only GET
+and decisions are POST-only forms, so mail scanners that prefetch links
+(Outlook SafeLinks) can never trigger an approval. The key-protected
+`POST /api/approval/{id}` remains for automation.
+
+### Why Durable Functions
+
+- **Durable approval gate** — `wait_for_external_event("approval")` raced
+  against a `create_timer` deadline (default 24h, per-run override). While
+  paused the app scales to zero — no compute cost during human review.
+- **Deterministic replay** — `run_id` is derived from
+  `context.current_utc_datetime`; the orchestrator does no I/O.
+- **At-least-once activities with retry** — every activity runs with
+  `RetryOptions(3 attempts)`; delivery is idempotent per `run_id:event_id`
+  (recorded in the repository) so a retry can't double-send.
+- **Task hub on Azure Storage** — no extra checkpoint database; the
+  `CalorchTaskHub` (see `host.json`) lives in the function app's storage
+  account. `functionTimeout` is 30 min (Flex Consumption), so a single
+  long activity won't hit the classic 10-min Consumption cap.
+
+### LangGraph runtime (local dev)
+
+`calorch.graph.make_graph` still assembles the equivalent pipeline as a
+LangGraph `StateGraph` (registry-driven agents, `Send` fan-out,
+`interrupt()` approval, in-memory checkpoints). It's used for
+`langgraph dev` and unit tests; the Durable Functions app is the
+deployment target.
 
 ---
 
@@ -215,8 +274,9 @@ START
 
 | Provider | Models | Authentication | Notes |
 |----------|--------|---------------|-------|
-| **Opencode Go** | `deepseek-v4-pro`, `deepseek-v4-flash`, `kimi-k2.5`, `kimi-k2.6`, `glm-5.1`, `glm-5` | `OPENCODE_GO_API_KEY` | OpenAI-compatible endpoint, ~$10/mo |
-| **Azure OpenAI** | `gpt-4o`, `gpt-4o-mini` | `AZURE_OPENAI_API_KEY` + endpoint | Fallback when Opencode Go absent |
+| **Azure OpenAI** | `gpt-4o`, `gpt-4o-mini` | `AZURE_OPENAI_API_KEY` + endpoint | Default production LLM |
+| **Opencode Go** | `deepseek-v4-pro`, `deepseek-v4-flash`, `kimi-k2.5`, `kimi-k2.6`, `glm-5.1`, `glm-5` | `OPENCODE_GO_API_KEY` | OpenAI-compatible endpoint; overrides Azure OpenAI when set |
+| **Mock** | `MockChatModel` | none | `USE_MOCKS=true` — deterministic, for demo/tests |
 
 ---
 
@@ -224,104 +284,115 @@ START
 
 ```
 calorch/
+├── function_app.py                   # Azure Functions entry point (registers durable blueprints)
+├── host.json                         # Functions host config + durableTask task hub
+├── local.settings.json               # Local Functions settings (func start)
 ├── pyproject.toml
-├── langgraph.json
-├── Dockerfile
+├── langgraph.json                    # `langgraph dev` entry (graph.make_graph)
 ├── .env.example
-├── .gitignore
-├── data/
-│   ├── seed_events.json              # 16 demo events (2 per workflow type)
-│   └── templates/                    # 8 JSON report templates
-│       ├── earnings_call.json
-│       ├── management_meeting.json
-│       ├── conference.json
-│       ├── kol_meeting.json
-│       ├── channel_check.json
-│       ├── portfolio_meeting.json
-│       ├── internal_review.json
-│       └── analyst_meeting.json
 ├── src/calorch/
+│   ├── data/                         # packaged data (ships in the wheel)
+│   │   ├── seed_events.json          #   demo events (USE_MOCKS=true)
+│   │   └── templates/                #   8 JSON report templates
+│   ├── durable/                      # Azure Durable Functions orchestration (deployment)
+│   │   ├── orchestrator.py           #   orchestrator + timer/HTTP triggers + approval gate
+│   │   ├── activities.py             #   5 activities wrapping nodes/agents
+│   │   └── state.py                  #   JSON (de)serialization adapter
+│   ├── agents/                       # Modular per-event-type agents
+│   │   ├── base.py                   #   AgentSpec, registry, default subgraph factory
+│   │   └── builtin/                  #   one self-contained module per event type
+│   │       ├── earnings_call.py      #     keywords + analysis builder + register()
+│   │       └── ...                   #     (8 more)
+│   ├── graph.py                      # LangGraph StateGraph (local dev / tests)
+│   ├── nodes.py                      # Node functions + per-event pipeline
 │   ├── state.py                      # TypedDict state, Pydantic models, enums
 │   ├── config.py                     # Settings from environment
-│   ├── graph.py                      # StateGraph assembly (7 nodes, 2 fan-outs)
-│   ├── nodes.py                      # Node functions + per-event pipeline
-│   ├── renderers.py                  # DOCX (python-docx) + HTML email builders
+│   ├── analysis.py                   # EventAnalysis + shared builder toolkit
+│   ├── renderers.py                  # DOCX (python-docx) + HTML email rendering
 │   ├── _earnings_helpers.py          # Financial table builders + formatters
 │   ├── templates.py                  # Template engine — JSON → EventAnalysis
-│   ├── llm.py                        # LLM factory — Opencode Go → Azure → MockChatModel
-│   ├── llm_enrich.py                 # LLM enrichment with thinking-block filter
+│   ├── llm.py / llm_enrich.py        # LLM factory + enrichment with thinking-block filter
 │   ├── providers.py                  # Protocol-based live data layer
+│   ├── data_ingestion.py             # Blob ingestion pipeline (SEC + AlphaSense → calorch-inputs)
+│   ├── blob_store.py                 # Azure Blob Storage (inputs/outputs) + local fallback
 │   ├── tools.py                      # GraphClient, OneDrive, Repository, make_providers
-│   ├── sec.py                        # SEC EDGAR client, TickerMap, form classification
-│   ├── sec_ixbrl.py                  # iXBRL parser + companyfacts fundamentals
-│   ├── sec_efts.py                   # SEC full-text search client
-│   ├── fred.py                       # FRED API client
-│   ├── fed_h15.py                    # FOMC H.15 yield curve scraper
-│   ├── tiingo.py                     # Tiingo API client (prices + consensus)
-│   ├── serve.py                      # FastAPI endpoints (/health, /run, /runs/{id})
-│   └── cli.py                        # `calorch run / summary / serve`
-├── tests/                            # 57 tests across 10 modules
-│   ├── test_graph.py                 # 3 end-to-end graph tests
-│   ├── test_renderers.py             # DOCX + HTML rendering
-│   ├── test_llm_enrich.py            # LLM enrichment + thinking filter
-│   ├── test_providers.py             # Provider dispatch + live provider units
-│   ├── test_sec_providers.py         # iXBRL parser + EFTS client
-│   ├── test_fred.py                  # FRED + FOMC H.15
-│   └── ...
+│   ├── sec.py / sec_ixbrl.py / sec_efts.py  # SEC EDGAR clients
+│   ├── alphasense.py                 # AlphaSense client (guidance/transcripts/sentiment)
+│   └── cli.py                        # `calorch run / summary / serve` (serve = langgraph dev)
+├── tests/                            # tests (test_durable, test_agents, test_graph, …)
 ├── docs/
-│   ├── architecture.md               # Full Mermaid architecture doc
+│   ├── architecture.md / .html       # Durable Functions architecture
 │   └── evaluations/                  # ADR, data-source, implementation reviews
 ├── deploy/
-│   ├── README.md                     # Cost comparison + ops guide
-│   ├── containerapp.yaml             # ACA template
-│   └── deploy.ps1                    # One-shot bootstrap script
-└── scripts/
-    ├── run_demo.py                   # End-to-end smoke test
-    ├── run_sec.py                    # Real SEC EDGAR run
-    └── render_architecture.py        # Markdown → HTML with Mermaid CDN
+│   └── azure-functions.md            # ► Azure Durable Functions deployment guide
+└── scripts/                          # run_demo, run_sec, render_architecture
 ```
 
 ---
 
 ## Quick Start
 
-```powershell
-# 1. Install
+### Local — demo (no keys)
+
+```bash
 python -m pip install -e .
 
-# 2. Demo (no keys required — seed events + MockChatModel)
+# end-to-end on seed data with MockChatModel
 python scripts/run_demo.py
-
-# 3. Production run
-$env:OPENCODE_GO_API_KEY  = "sk-..."
-$env:OPENCODE_GO_MODEL    = "deepseek-v4-pro"
-$env:TIINGO_API_KEY      = "your-key"        # optional
+# or the CLI
 python -m calorch.cli run --start 2026-06-01 --end 2026-06-08
 ```
+
+### Local — Durable Functions host
+
+Requires [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local) and a storage emulator (Azurite):
+
+```bash
+pip install -e .
+func start                      # indexes the 10 functions from function_app.py
+
+# trigger a run (draft mode)
+curl -X POST http://localhost:7071/api/run \
+  -H "Content-Type: application/json" \
+  -d '{"start":"2026-06-08T00:00:00Z","end":"2026-06-15T00:00:00Z","send_emails":false}'
+```
+
+### Deploy to Azure
+
+See **[deploy/azure-functions.md](deploy/azure-functions.md)** — the full
+guide for the Durable Functions app: provisioning, app settings, Microsoft
+Graph registration, smoke tests, CI/CD, and troubleshooting.
 
 ---
 
 ## Environment Variables
 
+See `src/calorch/config.py` for the authoritative list and defaults.
+
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `OPENCODE_GO_API_KEY` | Yes (for LLM) | Opencode Go API key |
-| `OPENCODE_GO_MODEL` | No | Model ID (`deepseek-v4-pro` default: `glm-5.1`) |
-| `AZURE_OPENAI_API_KEY` | No | Azure OpenAI (fallback LLM) |
-| `AZURE_OPENAI_ENDPOINT` | No | Azure OpenAI endpoint |
-| `TIINGO_API_KEY` | No | Real-time EOD prices + consensus ($50/mo) |
-| `FRED_API_KEY` | No | FRED macro API (free; no-key works for low volume) |
-| `GRAPH_TENANT_ID` | Yes (prod) | Entra ID tenant |
-| `GRAPH_CLIENT_ID` | Yes (prod) | Entra ID app registration |
-| `GRAPH_CLIENT_SECRET` | Yes (prod) | Entra ID client secret |
-| `GRAPH_USER_ID` | No | UPN (default: `me`) |
-| `SEC_USER_AGENT` | Yes (prod) | `"Your Name you@example.com"` |
-| `SEC_WATCHLIST` | No | Tickers (default: AAPL,MSFT,NVDA,…) |
-| `USE_MOCKS` | No | `true` = MockChatModel + seed events (default: `true`) |
-| `CALORCH_API_KEY` | No | API auth for `/run` endpoint |
-| `CHECKPOINT_POSTGRES_URI` | No | Durable checkpoints across restarts |
-| `USE_FRED` / `USE_FED_H15` / `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` | No | Toggle free sources (default: `true`) |
-| `LANGSMITH_API_KEY` | No | LangSmith tracing |
+| `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` | Yes (prod LLM) | Azure OpenAI classification + enrichment |
+| `AZURE_OPENAI_DEPLOYMENT` | No | Chat deployment (default `gpt-4o`) |
+| `OPENCODE_GO_API_KEY` / `OPENCODE_GO_MODEL` | No | OpenAI-compatible alt; overrides Azure OpenAI |
+| `CRON_SCHEDULE` | No | Timer NCRONTAB (default `0 0 9 * * 1` = Mon 09:00 UTC) |
+| `APPROVER_EMAILS` | No | CSV of addresses notified when a send run awaits approval (empty = no email; gate still works via API) |
+| `APPROVAL_BASE_URL` | No | Base URL for emailed review links (default `https://$WEBSITE_HOSTNAME`) |
+| `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` | Yes (prod) | Entra ID app registration for Microsoft Graph |
+| `GRAPH_USER_ID` | No | Mailbox/calendar UPN (default `me`) |
+| `ONEDRIVE_DRIVE_ID` | No | OneDrive target for DOCX archive |
+| `AZURE_STORAGE_ACCOUNT_URL` *or* `AZURE_STORAGE_CONNECTION_STRING` | Yes (prod) | Blob persistence (`calorch-inputs`/`calorch-outputs`); account URL = managed identity |
+| `USE_BLOB_PROVIDERS` | No | Read pre-ingested data from blob (default `true`) |
+| `REPO_BACKEND` | No | `table` (prod — Azure Table for delivery idempotency, in the storage account) or `json` (local); `REPO_TABLE_NAME` names the table |
+| `AZURE_SEARCH_ENDPOINT` / `AZURE_SEARCH_INDEX` / `AZURE_SEARCH_API_KEY` | No | Azure AI Search RAG over the research corpus — empty disables it (no-op) |
+| `AZURE_SEARCH_SEMANTIC_CONFIG` / `RAG_TOP_K` / `KNOWLEDGE_WRITEBACK` | No | Semantic-ranking config name; passages retrieved per enrichment call (default 4); index each prepared analysis (default `true`) |
+| `OUTPUT_DIR` / `SEC_CACHE_DIR` / `AUDIT_LOG_PATH` | Yes (Azure) | Point at `/tmp/...` — the package mount is read-only |
+| `SEC_USER_AGENT` | Yes (prod) | `"Your Name you@example.com"` — SEC requires a real contact |
+| `SEC_WATCHLIST` | No | Ingestion tickers (default 10 mega-caps) |
+| `ALPHASENSE_API_KEY` (+ `_CLIENT_ID`/`_CLIENT_SECRET`/`_USERNAME`/`_PASSWORD`) | No | AlphaSense guidance/transcripts/sentiment; empty disables (degrades to empty) |
+| `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` / `USE_ALPHASENSE` | No | Toggle data sources (default `true`) |
+| `USE_MOCKS` | No | `true` = MockChatModel + seed events (default `true`) |
+| `CALORCH_AGENT_MODULES` | No | Comma-separated import paths of out-of-tree agent modules |
+| `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` / `LANGSMITH_TRACING` | No | LangSmith tracing of agent subgraphs |
 
 ---
 
@@ -334,93 +405,119 @@ python -m calorch.cli run --start 2026-06-01 --end 2026-06-08
 | `conference` | `conference.json` | Company overview, key questions for 1x1s, risk factors | Fundamentals + macro |
 | `kol_meeting` | `kol_meeting.json` | Pre-call research, hypotheses | N/A (people-based) |
 | `channel_check` | `channel_check.json` | Revenue overview, questionnaire (15-20 Q), risk factors | Fundamentals + EFTS |
-| `portfolio_meeting` | `portfolio_meeting.json` | Key movers, discussion items | FRED + H.15 (macro) |
+| `portfolio_meeting` | `portfolio_meeting.json` | Key movers, discussion items | SEC fundamentals + AlphaSense sentiment |
 | `internal_review` | `internal_review.json` | Performance review, key questions, risk factors | N/A |
 | `analyst_meeting` | `analyst_meeting.json` | Executive summary, key questions, risk factors | Fundamentals |
+
+### Adding a new agent
+
+Each event-type agent is a self-contained module that registers an
+`AgentSpec` (classification keywords + analysis builder + optional custom
+subgraph). The orchestrator, the Durable Functions activities, the Send
+fan-out and the keyword classifier all consult the registry, so adding an
+agent touches nothing else.
+
+1. **Add the type** to `EventType` in `src/calorch/state.py` (the
+   classifier's typed vocabulary).
+2. **Write one module** that registers the agent:
+
+   ```python
+   # src/calorch/agents/builtin/ipo_roadshow.py
+   from calorch.agents.base import AgentSpec, register
+   from calorch.analysis import EventAnalysis, base_analysis, build_with_template
+   from calorch.state import EventType
+
+   def build_ipo_roadshow(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
+       a = base_analysis(f"IPO Roadshow — {ev.subject}", ev, cls, ed)
+       ctx = {"event_id": ev.id, "confidence": cls.confidence, "tickers": a.tickers}
+       return build_with_template("ipo_roadshow", ctx, {}, llm_call, providers)
+
+   register(AgentSpec(
+       event_type=EventType.IPO_ROADSHOW,
+       analysis_builder=build_ipo_roadshow,
+       keywords=("ipo", "roadshow", "s-1"),
+   ))
+   ```
+3. **Make it import.** For in-tree agents, add it to
+   `src/calorch/agents/builtin/__init__.py`. For deployment-specific agents
+   shipped outside the package, list the module path in the
+   `CALORCH_AGENT_MODULES` env var (comma-separated) — no repo edit needed.
+   Such agents can pass an absolute `Path` as the template to
+   `build_with_template`, so they need zero files inside the package tree.
+
+Agents needing a richer shape than the default single prepare node (extra
+tool nodes, inner loops) pass `graph_factory=` to `AgentSpec` to build
+their own `StateGraph`; it only has to honour `AgentInput`/`AgentOutput`.
+To replace a built-in agent, `register(..., replace=True)`.
 
 ---
 
 ## Cost Profile (Weekly Run)
 
+Azure Durable Functions on **Flex Consumption** (scale-to-zero, per-execution billing).
+
 | Component | Monthly Cost |
 |---|---|
-| Azure Container Apps (Consumption, scale-to-zero) | ~$0.30 |
-| Azure Container Registry (Basic) | $5.00 |
-| Opencode Go LLM (~100 calls/week) | ~$10.00 |
-| SEC EDGAR (unlimited, fair-use throttled) | Free |
-| FRED + FOMC H.15 (unlimited) | Free |
-| Tiingo EOD (optional, 500 calls/day) | $50.00 |
-| Cosmos DB Serverless | ~$0.25 |
+| Function App (Flex Consumption) | ~$0 idle + pennies/run |
+| Storage account (task hub + artifacts) | <$1.00 |
+| Azure OpenAI (~100 calls/week) | ~$8–20 (token-driven) |
+| SEC EDGAR (unlimited, fair-use) | Free |
+| AlphaSense (licensed) | per contract |
+| Azure Table Storage (delivery idempotency) | ~$0 (cents) |
+| Azure AI Search (optional — institutional-knowledge RAG) | $0 Free tier / ~$75 Basic |
 | Azure Key Vault | ~$1.00 |
 | Application Insights + Log Analytics | ~$5.00 |
-| **Total (without Tiingo)** | **~$21.55/mo** |
-| **Total (with Tiingo)** | **~$71.55/mo** |
+| **Total (excl. AlphaSense)** | **~$15–28/mo** |
+
+
+The approval pause costs nothing — state waits in the task hub, not on a running instance.
 
 ---
 
 ## Tests
 
-```powershell
-# Full suite
+```bash
+# Full suite (no network — MockChatModel + inline HTTP mocks)
 python -m pytest tests/ -q
 
 # Key modules
-python -m pytest tests/test_graph.py -q         # End-to-end graph
+python -m pytest tests/test_durable.py -q       # Durable orchestrator (fake context)
+python -m pytest tests/test_agents.py -q        # Agent registry + extensibility
+python -m pytest tests/test_agent_builders.py -q # Per-type builder snapshots
+python -m pytest tests/test_graph.py -q         # End-to-end LangGraph pipeline
 python -m pytest tests/test_providers.py -q     # Provider dispatch
 python -m pytest tests/test_sec_providers.py -q # iXBRL + EFTS
-python -m pytest tests/test_serve.py -q         # HTTP API contract
-python -m pytest tests/test_audit.py -q        # Audit log
-python -m pytest tests/test_rate_limit.py -q    # Rate limiter
-python -m pytest tests/test_telemetry.py -q     # OpenTelemetry wrapper
-python -m pytest tests/test_logging_config.py -q# JSON logging + PII redaction
 ```
 
-**139 tests, all pass.** No network required — tests use MockChatModel + inline HTTP mocks.
+**201 tests** (one pre-existing rate-limiter GC test is a known failure on
+`main`, unrelated to orchestration). The durable suite drives the
+orchestrator generator with a fake context across the no-event, draft,
+approve, reject, and timeout paths — no Azure runtime required.
 
 ---
 
 ## Enterprise Hardening
 
-Production-grade reliability, security, and observability:
+### Application-level
+- **Structured JSON logging** (`calorch.logging_config`) — one JSON object per line, ready for App Insights / Log Analytics ingest. Set `LOG_FORMAT=json`.
+- **Request/run ID propagation** through `contextvars` — every log line and span carries the same correlation ID.
+- **PII redaction** in the log formatter — emails, SSN, phone numbers, bearer tokens, and API keys are redacted before emission.
+- **OpenTelemetry traces** (`calorch.telemetry`) — spans on every node, agent subgraph, LLM call, and HTTP request. `pip install calorch[otel]`; set `OTEL_EXPORTER_OTLP_ENDPOINT`.
+- **Shared HTTP client** (`calorch.http_client`) — connection pooling, exponential-backoff retry (tenacity), circuit breaker. All external data sources use it.
+- **Idempotent delivery** — `deliver_event` checks the repository for an existing `delivery_key` before sending; combined with activity retries this guarantees at-most-once email send.
+- **SEC fair-use** — thread-safe rate limiter (≤10 req/sec) + on-disk cache.
 
-### Observability
-- **Structured JSON logging** (`calorch.logging_config`) — one JSON object per line to stdout, ready for Azure Log Analytics / Datadog ingest. Set `LOG_FORMAT=json`.
-- **Request ID propagation** through `contextvars` — every log line, audit entry, and span carries the same correlation ID. Inbound `X-Request-ID` is preserved end-to-end.
-- **PII redaction** in log formatter — emails, SSN, phone numbers, bearer tokens, and API keys are redacted before emission. Body text > 200 chars is truncated.
-- **OpenTelemetry traces** (`calorch.telemetry`) — spans on every graph node, LLM call, and HTTP request. Install with `pip install calorch[otel]`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to export to Jaeger / Tempo / Honeycomb.
-- **Metrics endpoint** at `GET /metrics` — per-service request count, success rate, average latency.
-- **Health probes** — `GET /health` (liveness, no deps) and `GET /ready` (readiness, checks graph + checkpointer + context).
-
-### Reliability
-- **Shared HTTP client** (`calorch.http_client`) — connection pooling (httpx), exponential-backoff retry via tenacity, circuit breaker pattern, and metrics. All 5 external data sources (SEC iXBRL, SEC EFTS, FRED, Tiingo, FOMC H.15) use it.
-- **Graph execution timeout** — `_invoke_with_timeout` runs `graph.invoke()` in a thread with a hard deadline (default 5 min). A hung LLM call returns 504 instead of blocking the ACA replica.
-- **Graceful shutdown** — SIGTERM/SIGINT handler closes the shared HTTP client and Postgres checkpointer.
-- **Idempotent delivery** — `deliver_event` checks the repository for an existing `delivery_key` before sending.
-
-### Security
-- **API key guard** — `X-Calorch-API-Key` header required on all mutating endpoints (validated with `hmac.compare_digest`).
-- **Rate limiting** — per-caller token bucket, 30 req/min default. Returns 429 + `Retry-After` header. `/health` and `/ready` are exempt.
-- **Request size limit** — `Content-Length` > 1 MB gets a 413 before the body parser runs.
-- **CORS** — opt-in via `CORS_ALLOWED_ORIGINS`. Default is same-origin only.
-- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Strict-Transport-Security`, `Referrer-Policy`, `Permissions-Policy` on every response.
-- **Input validation** — Pydantic `field_validator` rejects `end <= start` and windows > 31 days at the schema level.
-- **Tightened exception handlers** — bare `except Exception` blocks in `sec_ixbrl.py` and `renderers.py` replaced with specific `httpx.HTTPError`, `KeyError`, `TypeError`, `ValueError`, `json.JSONDecodeError` — each with `log.warning(...)` so failures don't disappear silently.
-
-### Compliance
-- **Append-only audit log** (`calorch.audit`) — every run lifecycle event, approval decision, rate-limit hit, and timeout is written to a JSONL file at `AUDIT_LOG_PATH` (default `./out/audit.jsonl`). Includes `request_id`, `run_id`, `thread_id`, actor, timestamp.
-- **No PII in audit body** — only the structured metadata; full calendar body and email content are deliberately excluded.
-
-### Environment Variables (Hardening)
+### Handled by the Azure platform (Durable Functions)
+- **HTTP auth** — the `run`/`approval`/`status` triggers use Azure **function keys** (`?code=`); distribute the approval key only to approvers. Rotate via `az functionapp keys set`.
+- **Scaling & timeouts** — the Functions host scales 0→N and enforces `functionTimeout` (30 min); a hung activity is killed by the host.
+- **Retries** — `RetryOptions(3 attempts)` on every activity; transient Graph/SEC/LLM failures are retried automatically.
+- **Secrets** — Key Vault references in app settings; managed identity for blob/table/search.
+- **Observability** — Application Insights wired at app creation; durable instance state queryable via `func durable` and `GET /api/status/{id}`.
 
 | Var | Default | Purpose |
 |---|---|---|
 | `LOG_FORMAT` | `text` | `json` for log aggregation |
 | `LOG_LEVEL` | `INFO` | Root log level |
-| `RATE_LIMIT_PER_MINUTE` | `30` | Per-caller rate budget |
-| `MAX_REQUEST_BYTES` | `1048576` | 413 threshold |
-| `RUN_TIMEOUT_SECONDS` | `300` | Graph invoke deadline |
-| `CORS_ALLOWED_ORIGINS` | `` (empty) | CSV of allowed origins |
-| `AUDIT_LOG_PATH` | `./out/audit.jsonl` | Compliance evidence file |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP collector URL (optional) |
 
 ---
@@ -434,9 +531,7 @@ Every generated report includes a Data Sources table showing provenance:
 | SEC iXBRL Fundamentals | ACTIVE | Revenue, EPS, margins, balance sheet, cash flow |
 | SEC iXBRL | ACTIVE | Company facts + segment revenue |
 | SEC EFTS | ACTIVE | Full-text filing search |
-| FRED | ACTIVE | Federal Reserve Economic Data |
-| FOMC H.15 | ACTIVE | US Treasury / Fed rates |
-| Tiingo | MISSING | TIINGO_API_KEY not set |
+| AlphaSense | ACTIVE | Guidance, transcripts/expert calls, sentiment |
 
 ---
 

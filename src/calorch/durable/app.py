@@ -21,6 +21,14 @@ from calorch.llm import get_chat_model
 
 
 def _build_context() -> Context:
+    # Defensive: ensure redacting log handlers + tracing are installed even if
+    # an activity process never imported function_app (both are idempotent).
+    from calorch.logging_config import configure_logging
+    from calorch.telemetry import init_tracing
+
+    configure_logging()
+    init_tracing(service_name="calorch")
+
     s = get_settings()
     out_dir = Path(os.getenv("OUTPUT_DIR", "./out"))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -29,7 +37,10 @@ def _build_context() -> Context:
         connection_string=s.azure_storage_connection_string,
         account_url=s.azure_storage_account_url,
         local_root=s.blob_local_root,
+        input_container=s.blob_input_container,
+        output_container=s.blob_output_container,
     )
+    from calorch.knowledge import make_knowledge_store
     ctx = Context(
         graph=make_graph_client(s),
         onedrive=make_onedrive_client(s),
@@ -41,6 +52,9 @@ def _build_context() -> Context:
         providers=make_providers(s),
         cik_lookup=make_cik_lookup(s),
         blob_store=blob,
+        knowledge=make_knowledge_store(s),
+        rag_top_k=s.rag_top_k,
+        knowledge_writeback=s.knowledge_writeback,
     )
     set_context(ctx)
     return ctx
