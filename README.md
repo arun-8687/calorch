@@ -119,15 +119,15 @@ class SentimentProvider(Protocol):     # AlphaSense
 
 In production the orchestrator reads **pre-ingested** provider data from
 Azure Blob Storage (`USE_BLOB_PROVIDERS=true`); a separate **ingestion
-pipeline** (`calorch.durable.ingestion`, wrapping `calorch.data_ingestion`)
+function** (`calorch.durable.ingestion`, wrapping `calorch.data_ingestion`)
 populates `calorch-inputs` on its own schedule (`INGEST_CRON_SCHEDULE`, or
-on demand via `POST /api/ingest`). It is its own durable orchestration —
-a timer/HTTP trigger resolves the `SEC_WATCHLIST` universe and fans out one
-retried activity per ticker, each downloading that ticker's SEC EDGAR +
-AlphaSense data and writing it to blob. Keeping ingestion off the report
-orchestrator's critical path means a brief run never blocks on live APIs.
-When a source lacks credentials it returns empty data with a ``note`` —
-never an exception, never a stub leaking into output.
+on demand via `POST /api/ingest`). It's a plain background batch — no
+durable gate — that loops over the `SEC_WATCHLIST` universe, downloading
+each ticker's SEC EDGAR + AlphaSense data and writing it to blob; per-ticker
+failures are isolated so one bad ticker can't abort the batch. Keeping
+ingestion off the report orchestrator's critical path means a brief run
+never blocks on live APIs. When a source lacks credentials it returns empty
+data with a ``note`` — never an exception, never a stub leaking into output.
 
 ---
 
@@ -221,7 +221,7 @@ calorch_orchestrator                       (deterministic — no I/O, no wall cl
   → activity_aggregate_briefing            (cross-event weekly summary → blob)
 ```
 
-### Functions in the app (17)
+### Functions in the app (15)
 
 | Function | Trigger | Responsibility |
 |---|---|---|
@@ -238,10 +238,8 @@ calorch_orchestrator                       (deterministic — no I/O, no wall cl
 | `activity_deliver` | activity | Idempotent draft/send + calendar patch + repository upsert |
 | `activity_aggregate_briefing` | activity | Builds the weekly HTML briefing |
 | `activity_request_approval` | activity | Emails approvers the run summary + review-page link |
-| `calorch_ingest_orchestrator` | orchestration | Fans out per-ticker data ingestion across `SEC_WATCHLIST` |
-| `timer_ingest` | timer (`INGEST_CRON_SCHEDULE`) | Starts scheduled ingestion (default daily 22:30 UTC) |
-| `http_ingest` | `POST /api/ingest` | Starts ingestion on demand (optional `tickers` body) |
-| `activity_ingest_ticker` | activity | Downloads + persists one ticker's SEC + AlphaSense data to blob |
+| `timer_ingest` | timer (`INGEST_CRON_SCHEDULE`) | Scheduled ingestion — loops over `SEC_WATCHLIST`, persisting SEC + AlphaSense data to blob (default daily 22:30 UTC) |
+| `http_ingest` | `POST /api/ingest` | Runs ingestion on demand (optional `tickers` body) |
 
 ### Approval workflow
 
@@ -359,7 +357,7 @@ Requires [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure
 
 ```bash
 pip install -e .
-func start                      # indexes the 17 functions from function_app.py
+func start                      # indexes the 15 functions from function_app.py
 
 # trigger a run (draft mode)
 curl -X POST http://localhost:7071/api/run \
