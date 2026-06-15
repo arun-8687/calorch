@@ -20,6 +20,7 @@ from __future__ import annotations
 import azure.functions as func
 
 from .activities import get_blueprint as get_activities_blueprint
+from .ingestion import get_blueprint as get_ingestion_blueprint
 from .orchestrator import get_blueprint as get_orchestrator_blueprint
 
 
@@ -27,6 +28,7 @@ def register_blueprints(app: func.FunctionApp) -> None:
     """Register all Durable Functions blueprints on a FunctionApp."""
     app.register_blueprint(get_orchestrator_blueprint())
     app.register_blueprint(get_activities_blueprint())
+    app.register_blueprint(get_ingestion_blueprint())
 
 
 __all__ = ["register_blueprints"]

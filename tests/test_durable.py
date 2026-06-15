@@ -450,3 +450,119 @@ class TestApprovalNotification:
         drive(run_orchestrator(ctx), _happy_path_responder(None))
         assert not any(t.name == "activity_request_approval" for t in ctx.activity_calls)
         assert ctx.custom_statuses == []
+
+
+# ---------------------------------------------------------------------------
+# Data-ingestion pipeline (separate durable orchestration)
+# ---------------------------------------------------------------------------
+class TestIngestionOrchestrator:
+    def _run(self, input_data: dict[str, Any], per_ticker):
+        from calorch.durable.ingestion import run_ingest_orchestrator
+
+        ctx = FakeContext(input_data)
+
+        def responder(task: FakeTask):
+            if task.kind == "task_all":
+                return [per_ticker(t.payload["ticker"]) for t in task.payload]
+            raise AssertionError(f"unexpected task {task.kind}")
+
+        result = drive(run_ingest_orchestrator(ctx), responder)
+        return ctx, result
+
+    def test_fans_out_one_activity_per_ticker(self):
+        ctx, result = self._run(
+            {"run_id": "ingest-1", "tickers": ["AAPL", "MSFT"], "date": "20260615"},
+            per_ticker=lambda t: {"status": "ok", "ticker": t},
+        )
+        # task_all received one activity_ingest_ticker call per ticker
+        calls = [t for t in ctx.activity_calls if t.name == "activity_ingest_ticker"]
+        assert [c.payload["ticker"] for c in calls] == ["AAPL", "MSFT"]
+        assert all(c.payload["date"] == "20260615" for c in calls)
+        assert result["ticker_count"] == 2
+        assert result["succeeded"] == ["AAPL", "MSFT"]
+        assert result["failed"] == []
+
+    def test_partial_failure_is_reported_not_fatal(self):
+        ctx, result = self._run(
+            {"run_id": "ingest-1", "tickers": ["AAPL", "BADTICK"]},
+            per_ticker=lambda t: {"status": "ok" if t == "AAPL" else "error", "ticker": t},
+        )
+        assert result["succeeded"] == ["AAPL"]
+        assert result["failed"] == ["BADTICK"]
+
+    def test_empty_universe_short_circuits(self):
+        from calorch.durable.ingestion import run_ingest_orchestrator
+
+        ctx = FakeContext({"run_id": "ingest-1", "tickers": []})
+
+        def responder(task):
+            raise AssertionError("no activities should be scheduled")
+
+        result = drive(run_ingest_orchestrator(ctx), responder)
+        assert result["ticker_count"] == 0
+        assert ctx.activity_calls == []
+
+    def test_date_defaults_to_orchestration_clock(self):
+        _, result = self._run(
+            {"run_id": "ingest-1", "tickers": ["AAPL"]},
+            per_ticker=lambda t: {"status": "ok", "ticker": t},
+        )
+        assert result["date"] == "20260608"  # FakeContext clock
+
+
+class TestIngestionActivity:
+    def test_missing_ticker_degrades(self):
+        from calorch.durable import ingestion as I
+
+        out = I._ingest_ticker_impl({"ticker": "", "run_id": "r1"})
+        assert out["status"] == "error" and "no ticker" in out["error"]
+
+    def test_delegates_to_pipeline(self, monkeypatch):
+        from calorch.durable import ingestion as I
+
+        captured: dict[str, Any] = {}
+
+        class FakePipeline:
+            def __init__(self, date: str = "") -> None:
+                captured["date"] = date
+
+            def run(self, tickers):
+                captured["tickers"] = tickers
+                return {"tickers": {tickers[0]: {"fundamentals": {"status": "ok"}}}}
+
+        monkeypatch.setattr("calorch.data_ingestion.IngestionPipeline", FakePipeline)
+        out = I._ingest_ticker_impl({"ticker": "AAPL", "date": "20260615", "run_id": "r1"})
+        assert out["status"] == "ok" and out["ticker"] == "AAPL"
+        assert captured == {"date": "20260615", "tickers": ["AAPL"]}
+        assert out["detail"] == {"fundamentals": {"status": "ok"}}
+
+    def test_pipeline_exception_degrades(self, monkeypatch):
+        from calorch.durable import ingestion as I
+
+        class BoomPipeline:
+            def __init__(self, date: str = "") -> None:
+                pass
+
+            def run(self, tickers):
+                raise RuntimeError("network down")
+
+        monkeypatch.setattr("calorch.data_ingestion.IngestionPipeline", BoomPipeline)
+        out = I._ingest_ticker_impl({"ticker": "AAPL", "run_id": "r1"})
+        assert out["status"] == "error" and "network down" in out["error"]
+
+
+class TestIngestionRegistration:
+    def test_ingestion_functions_registered(self):
+        import azure.functions as func
+
+        from calorch.durable import register_blueprints
+
+        app = func.FunctionApp()
+        register_blueprints(app)
+        registered = {f.get_function_name() for f in app.get_functions()}
+        assert {
+            "calorch_ingest_orchestrator",
+            "activity_ingest_ticker",
+            "timer_ingest",
+            "http_ingest",
+        } <= registered

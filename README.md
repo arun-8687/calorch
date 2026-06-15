@@ -118,10 +118,16 @@ class SentimentProvider(Protocol):     # AlphaSense
 ```
 
 In production the orchestrator reads **pre-ingested** provider data from
-Azure Blob Storage (`USE_BLOB_PROVIDERS=true`); a separate ingestion
-pipeline (`calorch.data_ingestion`) populates `calorch-inputs` on its own
-schedule. When a source lacks credentials it returns empty data with a
-``note`` — never an exception, never a stub leaking into output.
+Azure Blob Storage (`USE_BLOB_PROVIDERS=true`); a separate **ingestion
+pipeline** (`calorch.durable.ingestion`, wrapping `calorch.data_ingestion`)
+populates `calorch-inputs` on its own schedule (`INGEST_CRON_SCHEDULE`, or
+on demand via `POST /api/ingest`). It is its own durable orchestration —
+a timer/HTTP trigger resolves the `SEC_WATCHLIST` universe and fans out one
+retried activity per ticker, each downloading that ticker's SEC EDGAR +
+AlphaSense data and writing it to blob. Keeping ingestion off the report
+orchestrator's critical path means a brief run never blocks on live APIs.
+When a source lacks credentials it returns empty data with a ``note`` —
+never an exception, never a stub leaking into output.
 
 ---
 
@@ -215,7 +221,7 @@ calorch_orchestrator                       (deterministic — no I/O, no wall cl
   → activity_aggregate_briefing            (cross-event weekly summary → blob)
 ```
 
-### Functions in the app (13)
+### Functions in the app (17)
 
 | Function | Trigger | Responsibility |
 |---|---|---|
@@ -232,6 +238,10 @@ calorch_orchestrator                       (deterministic — no I/O, no wall cl
 | `activity_deliver` | activity | Idempotent draft/send + calendar patch + repository upsert |
 | `activity_aggregate_briefing` | activity | Builds the weekly HTML briefing |
 | `activity_request_approval` | activity | Emails approvers the run summary + review-page link |
+| `calorch_ingest_orchestrator` | orchestration | Fans out per-ticker data ingestion across `SEC_WATCHLIST` |
+| `timer_ingest` | timer (`INGEST_CRON_SCHEDULE`) | Starts scheduled ingestion (default daily 22:30 UTC) |
+| `http_ingest` | `POST /api/ingest` | Starts ingestion on demand (optional `tickers` body) |
+| `activity_ingest_ticker` | activity | Downloads + persists one ticker's SEC + AlphaSense data to blob |
 
 ### Approval workflow
 
@@ -349,7 +359,7 @@ Requires [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure
 
 ```bash
 pip install -e .
-func start                      # indexes the 10 functions from function_app.py
+func start                      # indexes the 17 functions from function_app.py
 
 # trigger a run (draft mode)
 curl -X POST http://localhost:7071/api/run \
@@ -374,7 +384,8 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` | Yes (prod LLM) | Azure OpenAI classification + enrichment |
 | `AZURE_OPENAI_DEPLOYMENT` | No | Chat deployment (default `gpt-4o`) |
 | `OPENCODE_GO_API_KEY` / `OPENCODE_GO_MODEL` | No | OpenAI-compatible alt; overrides Azure OpenAI |
-| `CRON_SCHEDULE` | No | Timer NCRONTAB (default `0 0 9 * * 1` = Mon 09:00 UTC) |
+| `CRON_SCHEDULE` | No | Orchestrator timer NCRONTAB (default `0 0 9 * * 1` = Mon 09:00 UTC) |
+| `INGEST_CRON_SCHEDULE` | No | Data-ingestion timer NCRONTAB (default `0 30 22 * * *` = daily 22:30 UTC) |
 | `APPROVER_EMAILS` | No | CSV of addresses notified when a send run awaits approval (empty = no email; gate still works via API) |
 | `APPROVAL_BASE_URL` | No | Base URL for emailed review links (default `https://$WEBSITE_HOSTNAME`) |
 | `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` | Yes (prod) | Entra ID app registration for Microsoft Graph |
