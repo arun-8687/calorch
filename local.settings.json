@@ -4,12 +4,13 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
     "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
-    "AzureWebJobs.CalorchOrchestrator.Disabled": "false",
-    "AzureWebJobs.ActivityScanCalendar.Disabled": "false",
-    "AzureWebJobs.ActivityClassify.Disabled": "false",
-    "AzureWebJobs.ActivityAgent.Disabled": "false",
-    "AzureWebJobs.ActivityDeliver.Disabled": "false",
-    "AzureWebJobs.ActivityAggregateBriefing.Disabled": "false"
+    "AzureWebJobs.calorch_orchestrator.Disabled": "false",
+    "AzureWebJobs.timer_start.Disabled": "false",
+    "AzureWebJobs.activity_scan_calendar.Disabled": "false",
+    "AzureWebJobs.activity_classify.Disabled": "false",
+    "AzureWebJobs.activity_agent.Disabled": "false",
+    "AzureWebJobs.activity_deliver.Disabled": "false",
+    "AzureWebJobs.activity_aggregate_briefing.Disabled": "false"
   },
   "Host": {
     "LocalHttpPort": 7071,

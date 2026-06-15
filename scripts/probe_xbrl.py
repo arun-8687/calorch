@@ -1,4 +1,4 @@
-import json, httpx
+import httpx
 ua = 'Calorch Research calorch@example.com'
 data = httpx.get('https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json', headers={'User-Agent': ua}, timeout=30).json()
 us_gaap = data['facts']['us-gaap']

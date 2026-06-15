@@ -1,8 +1,5 @@
 """Tests for the StateGraph assembly and full happy path."""
-import json
-import shutil
-import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import pytest
@@ -50,12 +47,14 @@ def ctx(tmp_output):
 
 
 def test_graph_compiles():
-    from calorch.state import EventType, EVENT_TYPE_TO_AGENT
+    from calorch.agents import agent_node_names
+    from calorch.state import EventType
 
     g = make_graph()
     assert "scan_calendar" in g.nodes
+    node_names = agent_node_names()
     for ev_type in EventType:
-        assert EVENT_TYPE_TO_AGENT[ev_type] in g.nodes
+        assert node_names[ev_type] in g.nodes
     assert "approval_gate" in g.nodes
     assert "deliver_event" in g.nodes
     assert "aggregate_briefing" in g.nodes
@@ -64,8 +63,8 @@ def test_graph_compiles():
 def test_end_to_end_runs_all_eight(ctx):
     g = make_graph()
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "test-run",
     }
@@ -92,8 +91,8 @@ def test_send_run_pauses_after_previews_then_resumes(ctx):
     g = make_graph()
     cfg = {"configurable": {"thread_id": "approval-test"}}
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "approval-test",
         "send_emails": True,
@@ -118,8 +117,8 @@ def test_rejected_send_run_never_delivers(ctx):
     g = make_graph()
     cfg = {"configurable": {"thread_id": "rejected-test"}}
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "rejected-test",
         "send_emails": True,
@@ -138,8 +137,8 @@ def test_rejected_send_run_never_delivers(ctx):
 def test_delivery_replay_is_idempotent(ctx):
     g = make_graph()
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "idempotency-test",
         "send_emails": False,
@@ -168,8 +167,8 @@ def test_empty_calendar_still_writes_briefing(ctx):
     ctx.graph = MockGraphClient(fixtures=[])
     g = make_graph()
     state = {
-        "window_start": datetime(2026, 3, 2, tzinfo=timezone.utc),
-        "window_end": datetime(2026, 3, 9, tzinfo=timezone.utc),
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
         "use_mocks": True,
         "run_id": "empty-test",
     }
@@ -177,3 +176,26 @@ def test_empty_calendar_still_writes_briefing(ctx):
     assert result["events"] == []
     assert result.get("emails", {}) == {}
     assert result["weekly_briefing"].event_count == 0
+
+
+def test_briefing_html_escapes_error_strings(ctx):
+    """SEC-2: event-derived error text is HTML-escaped in the weekly briefing."""
+    from datetime import datetime, UTC
+    from pathlib import Path
+
+    from calorch.nodes import aggregate_briefing
+
+    state = {
+        "window_start": datetime(2026, 3, 2, tzinfo=UTC),
+        "window_end": datetime(2026, 3, 9, tzinfo=UTC),
+        "run_id": "xss-test",
+        "events": [],
+        "classifications": {},
+        "emails": {},
+        "followups": [],
+        "errors": ["docx:<script>alert(1)</script>:boom"],
+    }
+    result = aggregate_briefing(state)
+    html_text = Path(result["weekly_briefing"].path).read_text(encoding="utf-8")
+    assert "<script>alert(1)</script>" not in html_text
+    assert "&lt;script&gt;" in html_text

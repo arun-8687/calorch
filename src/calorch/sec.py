@@ -16,10 +16,10 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 import httpx
 from cachetools import TTLCache
@@ -262,7 +262,7 @@ class SecEdgarClient:
                 prim = primdoc_list[i] if i < len(primdoc_list) else ""
                 items = items_list[i] if i < len(items_list) else ""
                 company = sub.get("name", ticker)
-                start_dt = datetime(d.year, d.month, d.day, 9, 0, tzinfo=timezone.utc)
+                start_dt = datetime(d.year, d.month, d.day, 9, 0, tzinfo=UTC)
                 end_dt = start_dt + timedelta(hours=1)
                 subject = f"{company} — {form} ({items or 'filing'})"
                 body = (
@@ -332,7 +332,7 @@ class SecEdgarClient:
             "ticker": ticker,
             "cik": cik,
             "company": facts.get("entityName"),
-            "as_of": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+            "as_of": datetime.now(tz=UTC).isoformat(timespec="seconds"),
             "revenue": rev.get("val") if rev else None,
             "revenue_period": f"{rev.get('start', '?')} → {rev.get('end', '?')}" if rev else None,
             "revenue_form": rev.get("form") if rev else None,

@@ -13,25 +13,22 @@ of runtime objects.
 """
 from __future__ import annotations
 
-import base64
+import html
 import json
 import logging
 import re
-import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import httpx
 from langchain_core.runnables import RunnableConfig
 
+from calorch.analysis import build_analysis
 from calorch.renderers import (
-    EventAnalysis,
-    build_analysis,
     render_docx,
     render_html_email,
-    sha256_bytes,
     write_text,
 )
 from calorch.state import (
@@ -39,8 +36,6 @@ from calorch.state import (
     DocxArtifact,
     EmailArtifact,
     EventType,
-    EVENT_TYPE_TO_AGENT,
-    EVENT_TYPE_TO_NODE,
     FollowUpItem,
     OrchestratorError,
     OrchestratorState,
@@ -74,9 +69,12 @@ class Context:
     output_dir: Path
     send_emails: bool = False             # if False, create drafts only
     to_addresses: list[str] | None = None  # override recipients
-    providers: Any = None                 # calorch.providers.ProviderBundle (free sources: FRED, iXBRL, EFTS)
+    providers: Any = None                 # calorch.providers.ProviderBundle (SEC EDGAR + AlphaSense)
     cik_lookup: Any = None                # callable(ticker) -> CIK (for iXBRL/EFTS enrichment)
     blob_store: Any = None                # calorch.blob_store.BlobStore (or NullBlobStore)
+    knowledge: Any = None                 # calorch.knowledge store (AI Search RAG, or NullKnowledgeStore)
+    rag_top_k: int = 4                    # passages to retrieve per enrichment call
+    knowledge_writeback: bool = True      # index each prepared analysis for future RAG
 
     def out(self, name: str) -> Path:
         p = self.output_dir / name
@@ -92,7 +90,7 @@ def set_context(ctx: Context) -> None:
     _CTX = ctx
 
 
-def _ctx(config: RunnableConfig | None = None) -> Context:
+def _ctx(config: Optional[RunnableConfig] = None) -> Context:
     """Return the runtime Context.
 
     If a LangGraph ``RunnableConfig`` is passed and contains a
@@ -144,21 +142,16 @@ def scan_calendar(state: OrchestratorState, config: Optional[RunnableConfig] = N
 # ---------------------------------------------------------------------------
 # Classification stage
 # ---------------------------------------------------------------------------
-_KEYWORDS: dict[EventType, tuple[str, ...]] = {
-    EventType.EARNINGS_CALL: ("earnings", "results", "guidance", "q1", "q2", "q3", "q4", "fy"),
-    EventType.MANAGEMENT_MEETING: ("ceo", "cfo", "cro", "cto", "1on1", "1:1", "town hall", "mgmt"),
-    EventType.CONFERENCE: ("conference", "summit", "expo", "investor day", "cmd", "capital markets day"),
-    EventType.KOL_MEETING: ("kol", "expert", "consultant", "thought leader", "kolsight"),
-    EventType.CHANNEL_CHECK: ("channel", "distributor", "reseller", "channel partner", "var"),
-    EventType.PORTFOLIO_MEETING: ("portfolio", "ic ", "investment committee", "holdings"),
-    EventType.INTERNAL_REVIEW: ("internal", "retro", "postmortem", "sprint review", "team meeting"),
-    EventType.ANALYST_MEETING: ("analyst", "broker", "sell-side", "buy-side"),
-}
+def _keywords() -> dict[EventType, tuple[str, ...]]:
+    """Pass-1 keywords, declared per agent in calorch.agents modules."""
+    from calorch.agents import classification_keywords
+
+    return classification_keywords()
 
 
 def _keyword_score(blob: str) -> tuple[EventType, int, dict[EventType, int]]:
     counts: dict[EventType, int] = {}
-    for ev, kws in _KEYWORDS.items():
+    for ev, kws in _keywords().items():
         c = sum(blob.count(k) for k in kws)
         if c:
             counts[ev] = c
@@ -225,7 +218,7 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
     """
     c = _ctx(config)
     results: dict[str, ClassificationResult] = dict(state.get("classifications", {}))
-    with start_span("calorch.node.llm_classify", event_count=len(state["events"])) as span:
+    with start_span("calorch.node.llm_classify", event_count=len(state["events"])):
         for ev in state["events"]:
             prev = results.get(ev.id) or ClassificationResult(event_id=ev.id)
             # Trust the SEC form hint
@@ -237,7 +230,7 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
                     final_label=prev.pass1_label,
                     confidence=0.95,
                     rationale=prev.rationale + " (trusted)",
-                    routed_node=EVENT_TYPE_TO_NODE[prev.pass1_label],
+                    routed_node=prev.pass1_label.value,
                 )
                 results[ev.id] = out
                 continue
@@ -277,7 +270,7 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
             if not isinstance(out, ClassificationResult):
                 out = ClassificationResult.model_validate({**out, "event_id": ev.id})
             out.event_id = ev.id
-            out.routed_node = EVENT_TYPE_TO_NODE[out.final_label]
+            out.routed_node = out.final_label.value
             results[ev.id] = out
     return {
         "classifications": results,
@@ -287,7 +280,8 @@ def llm_classify(state: OrchestratorState, config: Optional[RunnableConfig] = No
 
 def _parse_classification_json(text: str, event_id: str, prev: ClassificationResult) -> ClassificationResult:
     """Extract and validate a ClassificationResult from raw LLM text."""
-    import json, re
+    import json
+    import re
 
     # Try to extract the JSON object from the response
     # The model may wrap it in markdown fences or just output raw JSON
@@ -327,7 +321,7 @@ def _parse_classification_json(text: str, event_id: str, prev: ClassificationRes
         final_label=final_label,
         confidence=confidence,
         rationale=rationale,
-        routed_node=EVENT_TYPE_TO_NODE[final_label],
+        routed_node=final_label.value,
     )
 
 
@@ -337,7 +331,7 @@ def _pass1_fallback(event_id: str, prev: ClassificationResult) -> Classification
         final_label=prev.pass1_label,
         confidence=0.4,
         rationale=f"LLM failed; using keyword hint ({prev.pass1_label.value})",
-        routed_node=EVENT_TYPE_TO_NODE[prev.pass1_label],
+        routed_node=prev.pass1_label.value,
     )
 
 
@@ -354,10 +348,12 @@ def fan_out_prepare_events(state: OrchestratorState) -> list[Any] | str:
     """
     from langgraph.types import Send
 
+    from calorch.agents import get_agent
+
     sends: list[Send] = []
     for ev in state["events"]:
         cls = state["classifications"][ev.id]
-        agent_node = EVENT_TYPE_TO_AGENT[cls.final_label]
+        agent_node = get_agent(cls.final_label).node_name
         sends.append(
             Send(
                 agent_node,
@@ -395,103 +391,15 @@ def prepare_event(payload: dict[str, Any], config: Optional[RunnableConfig] = No
 
 
 def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
+    """Run the full per-event preparation pipeline (orchestrates helpers)."""
     log.info("prepare start event=%s type=%s conf=%.2f", ev.id, cls.final_label.value, cls.confidence)
     errors: list[str] = []
-    documents: dict[str, DocxArtifact] = {}
-    prepared_emails: dict[str, PreparedEmailArtifact] = {}
     calendar_links: dict[str, str] = {}
-    log_lines: list[str] = []
 
-    # --- 1) enterprise data ---
-    payload_tickers = _tickers(ev.subject)
-    if ev.sec_ticker:
-        payload_tickers = [ev.sec_ticker]
-    try:
-        ed = c.enterprise.fetch(ev.subject, tickers=payload_tickers)
-    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
-        log.warning("enterprise data network failure for %s: %s", ev.id, e)
-        ed = {"source": "fallback-mock", "snapshots": {}, "as_of": _now().isoformat()}
-        errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
-    except (ValueError, KeyError, TypeError) as e:
-        log.warning("enterprise data parse failure for %s: %s", ev.id, e)
-        ed = {"source": "fallback-mock", "snapshots": {}, "as_of": _now().isoformat()}
-        errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
+    ed = _fetch_enterprise_data(c, ev, run_name, event_name, errors)
+    analysis, documents = _build_and_store_docx(c, ev, cls, ed, run_name, event_name, errors)
 
-    # --- 1b) persist input data to blob storage ---
-    if c.blob_store:
-        try:
-            from calorch.blob_store import input_blob_path
-            input_key = input_blob_path("enterprise", f"{run_name}/{event_name}")
-            c.blob_store.upload_json("calorch-inputs", input_key, ed, metadata={"event_id": ev.id, "run_id": run_name})
-        except (OSError, ValueError) as e:
-            log.warning("blob input upload failed for %s: %s", ev.id, e)
-
-    # --- 2) analysis & DOCX ---
-    analysis = None
-    try:
-        analysis = build_analysis(
-            cls.final_label, ev, cls, ed, c.llm,
-            providers=c.providers, cik_lookup=c.cik_lookup,
-        )
-        analysis.confidence = cls.confidence
-        doc_path = c.out(f"runs/{run_name}/docs/{event_name}.docx")
-        render_docx(analysis, ev, doc_path)
-        documents[ev.id] = DocxArtifact(
-            event_id=ev.id,
-            path=str(doc_path),
-            sha256=sha256_file(doc_path),
-            bytes=doc_path.stat().st_size,
-        )
-        # --- 2b) persist DOCX to blob storage ---
-        if c.blob_store:
-            try:
-                from calorch.blob_store import output_blob_path
-                doc_blob = output_blob_path(run_name, event_name, f"{event_name}.docx")
-                blob_url = c.blob_store.upload_file(
-                    "calorch-outputs", doc_blob, doc_path,
-                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
-                )
-                documents[ev.id] = DocxArtifact(
-                    event_id=ev.id,
-                    path=str(doc_path),
-                    sha256=documents[ev.id].sha256,
-                    bytes=documents[ev.id].bytes,
-                    blob_url=blob_url,
-                )
-            except (OSError, ValueError) as e:
-                log.warning("blob DOCX upload failed for %s: %s", ev.id, e)
-        # --- 2c) persist analysis JSON to blob storage ---
-        if c.blob_store and analysis is not None:
-            try:
-                from calorch.blob_store import output_blob_path
-                analysis_blob = output_blob_path(run_name, event_name, f"{event_name}_analysis.json")
-                analysis_dict = {
-                    "event_id": analysis.event_id,
-                    "event_type": analysis.event_type.value,
-                    "title": analysis.title,
-                    "sections": analysis.sections,
-                    "tables": analysis.tables,
-                    "tickers": analysis.tickers,
-                    "source_attribution": analysis.source_attribution,
-                    "role_focus": analysis.role_focus,
-                    "confidence": analysis.confidence,
-                    "data_sources": analysis.data_sources,
-                }
-                c.blob_store.upload_json(
-                    "calorch-outputs", analysis_blob, analysis_dict,
-                    metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
-                )
-            except (OSError, ValueError) as e:
-                log.warning("blob analysis JSON upload failed for %s: %s", ev.id, e)
-    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
-        log.exception("docx generation I/O failure for %s", ev.id)
-        errors.append(f"docx:{ev.id}:{e!r}")
-    except (ValueError, KeyError, TypeError) as e:
-        log.exception("docx generation data failure for %s", ev.id)
-        errors.append(f"docx:{ev.id}:{e!r}")
-
-    # --- 3) OneDrive upload ---
+    # OneDrive upload (short, kept inline)
     onedrive_url: str | None = None
     try:
         if ev.id in documents:
@@ -503,62 +411,16 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
     except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
         log.warning("onedrive upload failed for %s: %s", ev.id, e)
         errors.append(f"onedrive:{ev.id}:{e!r}")
-    # For SEC events the canonical link is the EDGAR document — prefer that.
-    sec_link = ev.web_link or None
 
-    # --- 4) HTML email preview ---
-    try:
-        if analysis is None:
-            raise RuntimeError("analysis not generated — skipping email preview")
-        # Prefer the EDGAR web link over the local OneDrive URL for SEC events
-        link_for_email = sec_link or onedrive_url
-        link_label = "View filing on EDGAR" if sec_link and not onedrive_url else "Open DOCX"
-        html_body = render_html_email(analysis, ev, link_for_email, link_label=link_label)
-        html_path = c.out(f"runs/{run_name}/emails/{event_name}.html")
-        write_text(html_path, html_body)
+    prepared_emails = _render_email_preview(
+        c, ev, cls, analysis, documents, onedrive_url, run_name, event_name, errors
+    )
 
-        recipients = c.to_addresses or [a for a in ev.attendees if a] or ["research@firm.example"]
-        subject = f"[{cls.final_label.value.replace('_', ' ').title()}] {ev.subject}"
-        prepared_emails[ev.id] = PreparedEmailArtifact(
-            event_id=ev.id,
-            to=recipients,
-            subject=subject,
-            html_path=str(html_path),
-            html=html_body,
-            attachment_path=documents[ev.id].path if ev.id in documents else None,
-            document_url=link_for_email,
-        )
-        # --- 4b) persist HTML email to blob storage ---
-        if c.blob_store:
-            try:
-                from calorch.blob_store import output_blob_path
-                email_blob = output_blob_path(run_name, event_name, f"{event_name}.html")
-                email_blob_url = c.blob_store.upload_file(
-                    "calorch-outputs", email_blob, html_path,
-                    content_type="text/html",
-                    metadata={"event_id": ev.id, "run_id": run_name},
-                )
-                prepared_emails[ev.id] = PreparedEmailArtifact(
-                    event_id=ev.id,
-                    to=recipients,
-                    subject=subject,
-                    html_path=str(html_path),
-                    html=html_body,
-                    attachment_path=documents[ev.id].path if ev.id in documents else None,
-                    document_url=link_for_email,
-                    blob_url=email_blob_url,
-                )
-            except (OSError, ValueError) as e:
-                log.warning("blob HTML upload failed for %s: %s", ev.id, e)
-    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError, ValueError, KeyError) as e:
-        log.exception("email preview generation failed for %s", ev.id)
-        errors.append(f"email_preview:{ev.id}:{e!r}")
-
-    log_lines.append(
+    log_lines = [
         f"prepare done event={ev.id} type={cls.final_label.value} "
         f"doc={'yes' if ev.id in documents else 'no'} "
         f"preview={'yes' if ev.id in prepared_emails else 'no'}"
-    )
+    ]
     span.set_attribute("errors", len(errors))
     span.set_attribute("has_doc", ev.id in documents)
     span.set_attribute("has_preview", ev.id in prepared_emails)
@@ -570,6 +432,174 @@ def _prepare_event_inner(c, ev, cls, run_name, event_name, span):
         "errors": errors,
         "log": log_lines,
     }
+
+
+def _fetch_enterprise_data(c, ev, run_name, event_name, errors: list[str]) -> dict[str, Any]:
+    """Fetch enterprise data for the event and persist the raw input to blob."""
+    payload_tickers = [ev.sec_ticker] if ev.sec_ticker else _tickers(ev.subject)
+    try:
+        ed = c.enterprise.fetch(ev.subject, tickers=payload_tickers)
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+        log.warning("enterprise data network failure for %s: %s", ev.id, e)
+        ed = {"source": "fallback-mock", "snapshots": {}, "as_of": _now().isoformat()}
+        errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
+    except (ValueError, KeyError, TypeError) as e:
+        log.warning("enterprise data parse failure for %s: %s", ev.id, e)
+        ed = {"source": "fallback-mock", "snapshots": {}, "as_of": _now().isoformat()}
+        errors.append(f"enterprise_fetch:{ev.id}:{e!r}")
+
+    if c.blob_store:
+        try:
+            from calorch.blob_store import input_blob_path
+            input_key = input_blob_path("enterprise", f"{run_name}/{event_name}")
+            c.blob_store.upload_json(c.blob_store.input_container, input_key, ed, metadata={"event_id": ev.id, "run_id": run_name})
+        except (OSError, ValueError) as e:
+            log.warning("blob input upload failed for %s: %s", ev.id, e)
+    return ed
+
+
+def _build_and_store_docx(c, ev, cls, ed, run_name, event_name, errors: list[str]):
+    """Build the analysis, render+persist the DOCX, and index for RAG.
+
+    Returns ``(analysis | None, documents)``.
+    """
+    # RAG-augment the enrichment LLM (no-op unless AI Search is configured);
+    # classification is left un-augmented.
+    from calorch.knowledge import maybe_wrap_for_rag
+
+    enrich_llm = maybe_wrap_for_rag(c.llm, getattr(c, "knowledge", None), top_k=getattr(c, "rag_top_k", 4))
+    documents: dict[str, DocxArtifact] = {}
+    analysis = None
+    try:
+        analysis = build_analysis(
+            cls.final_label, ev, cls, ed, enrich_llm,
+            providers=c.providers, cik_lookup=c.cik_lookup,
+        )
+        analysis.confidence = cls.confidence
+        doc_path = c.out(f"runs/{run_name}/docs/{event_name}.docx")
+        render_docx(analysis, ev, doc_path)
+        documents[ev.id] = DocxArtifact(
+            event_id=ev.id, path=str(doc_path),
+            sha256=sha256_file(doc_path), bytes=doc_path.stat().st_size,
+        )
+        if c.blob_store:
+            _store_docx_blob(c, ev, cls, documents, doc_path, run_name, event_name)
+            _store_analysis_blob(c, ev, cls, analysis, run_name, event_name)
+        _index_analysis(c, analysis, run_name)
+    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as e:
+        log.exception("docx generation I/O failure for %s", ev.id)
+        errors.append(f"docx:{ev.id}:{e!r}")
+    except (ValueError, KeyError, TypeError) as e:
+        log.exception("docx generation data failure for %s", ev.id)
+        errors.append(f"docx:{ev.id}:{e!r}")
+    return analysis, documents
+
+
+def _store_docx_blob(c, ev, cls, documents, doc_path, run_name, event_name) -> None:
+    try:
+        from calorch.blob_store import output_blob_path
+        doc_blob = output_blob_path(run_name, event_name, f"{event_name}.docx")
+        blob_url = c.blob_store.upload_file(
+            c.blob_store.output_container, doc_blob, doc_path,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
+        )
+        existing = documents[ev.id]
+        documents[ev.id] = DocxArtifact(
+            event_id=ev.id, path=existing.path,
+            sha256=existing.sha256, bytes=existing.bytes, blob_url=blob_url,
+        )
+    except (OSError, ValueError) as e:
+        log.warning("blob DOCX upload failed for %s: %s", ev.id, e)
+
+
+def _store_analysis_blob(c, ev, cls, analysis, run_name, event_name) -> None:
+    try:
+        from calorch.blob_store import output_blob_path
+        analysis_blob = output_blob_path(run_name, event_name, f"{event_name}_analysis.json")
+        analysis_dict = {
+            "event_id": analysis.event_id,
+            "event_type": analysis.event_type.value,
+            "title": analysis.title,
+            "sections": analysis.sections,
+            "tables": analysis.tables,
+            "tickers": analysis.tickers,
+            "source_attribution": analysis.source_attribution,
+            "role_focus": analysis.role_focus,
+            "confidence": analysis.confidence,
+            "data_sources": analysis.data_sources,
+        }
+        c.blob_store.upload_json(
+            c.blob_store.output_container, analysis_blob, analysis_dict,
+            metadata={"event_id": ev.id, "run_id": run_name, "event_type": cls.final_label.value},
+        )
+    except (OSError, ValueError) as e:
+        log.warning("blob analysis JSON upload failed for %s: %s", ev.id, e)
+
+
+def _index_analysis(c, analysis, run_name) -> None:
+    """Write the analysis into the knowledge index (RAG corpus); best-effort."""
+    knowledge = getattr(c, "knowledge", None)
+    if knowledge is None or not getattr(c, "knowledge_writeback", True) or analysis is None:
+        return
+    knowledge.index_analysis(
+        {
+            "event_id": analysis.event_id,
+            "event_type": analysis.event_type.value,
+            "title": analysis.title,
+            "sections": analysis.sections,
+            "tickers": analysis.tickers,
+            "confidence": analysis.confidence,
+        },
+        run_id=run_name,
+    )
+
+
+def _render_email_preview(c, ev, cls, analysis, documents, onedrive_url, run_name, event_name, errors: list[str]):
+    """Render the HTML email preview and persist it. Returns prepared_emails."""
+    prepared_emails: dict[str, PreparedEmailArtifact] = {}
+    # SEC events prefer the EDGAR web link over the local OneDrive URL.
+    sec_link = ev.web_link or None
+    if analysis is None:
+        # DOCX/analysis failed above (error already recorded); skip cleanly.
+        errors.append(f"email_preview:{ev.id}:analysis not generated")
+        return prepared_emails
+    try:
+        link_for_email = sec_link or onedrive_url
+        link_label = "View filing on EDGAR" if sec_link and not onedrive_url else "Open DOCX"
+        html_body = render_html_email(analysis, ev, link_for_email, link_label=link_label)
+        html_path = c.out(f"runs/{run_name}/emails/{event_name}.html")
+        write_text(html_path, html_body)
+
+        recipients = c.to_addresses or [a for a in ev.attendees if a] or ["research@firm.example"]
+        subject = f"[{cls.final_label.value.replace('_', ' ').title()}] {ev.subject}"
+        attachment_path = documents[ev.id].path if ev.id in documents else None
+        blob_url = ""
+        if c.blob_store:
+            try:
+                from calorch.blob_store import output_blob_path
+                email_blob = output_blob_path(run_name, event_name, f"{event_name}.html")
+                blob_url = c.blob_store.upload_file(
+                    c.blob_store.output_container, email_blob, html_path,
+                    content_type="text/html",
+                    metadata={"event_id": ev.id, "run_id": run_name},
+                )
+            except (OSError, ValueError) as e:
+                log.warning("blob HTML upload failed for %s: %s", ev.id, e)
+        prepared_emails[ev.id] = PreparedEmailArtifact(
+            event_id=ev.id,
+            to=recipients,
+            subject=subject,
+            html_path=str(html_path),
+            html=html_body,
+            attachment_path=attachment_path,
+            document_url=link_for_email,
+            blob_url=blob_url,
+        )
+    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError, ValueError, KeyError) as e:
+        log.exception("email preview generation failed for %s", ev.id)
+        errors.append(f"email_preview:{ev.id}:{e!r}")
+    return prepared_emails
 
 
 # ---------------------------------------------------------------------------
@@ -760,10 +790,16 @@ def _deliver_event_inner(c, ev, cls, preview, document, onedrive_url, send_email
         if onedrive_url or sec_link:
             link = onedrive_url or sec_link
             label = "Open DOCX" if onedrive_url else "View filing on EDGAR"
+            # Event-derived links (ev.web_link) are untrusted: escape and only
+            # emit an anchor for http(s) schemes, else render the URL as text.
+            if link and link.startswith(("https://", "http://")):
+                content = f'<p>Brief ready: <a href="{html.escape(link, quote=True)}">{label}</a></p>'
+            else:
+                content = f"<p>Brief ready: {html.escape(link or '')}</p>"
             body = {
                 "body": {
                     "contentType": "HTML",
-                    "content": f"<p>Brief ready: <a href=\"{link}\">{label}</a></p>",
+                    "content": content,
                 }
             }
             c.graph.patch_event(ev.id, body)
@@ -845,8 +881,8 @@ _TICKER_FALSE_POSITIVES = frozenset({
     "USA", "US", "EU", "UK", "APAC", "EMEA", "LATAM", "CHINA", "JAPAN",
     # Industries / concepts
     "AI", "ML", "DL", "LLM", "GPU", "CPU", "TPU", "API", "SaaS", "PaaS", "IaaS",
-    "ML", "RAG", "RL", "CV", "NLP", "AGI", "ASI",
-    "EV", "AV", "ADAS", "OEM", "SEMI", "PCB", "IC", "SOC", "IP", "ASSP",
+    "RAG", "RL", "CV", "NLP", "AGI", "ASI",
+    "EV", "AV", "ADAS", "OEM", "SEMI", "PCB", "SOC", "IP", "ASSP",
     "TMT", "HC", "FIG", "TECH", "FIN", "REIT",
     # Financial / regulatory
     "EPS", "EBIT", "EBITDA", "PEG", "NAV", "AUM", "IRR", "NPV", "DCF", "WACC",
@@ -932,11 +968,17 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
             ("Open issues", state.get("errors", []) or ["(none)"]),
         ]
         out_path = c.out("briefings/weekly.html")
-        html = f"""<!doctype html><html><head><meta charset='utf-8'></head><body>
+        sections_html = "".join(
+            f"<h2>{html.escape(str(h))}</h2><ul>"
+            + "".join(f"<li>{html.escape(str(x))}</li>" for x in items)
+            + "</ul>"
+            for h, items in sections
+        )
+        briefing_html = f"""<!doctype html><html><head><meta charset='utf-8'></head><body>
 <h1>Weekly briefing &mdash; {state['window_start'].date()} to {state['window_end'].date()}</h1>
-{''.join(f'<h2>{h}</h2><ul>{"".join(f"<li>{x}</li>" for x in items)}</ul>' for h, items in sections)}
+{sections_html}
 </body></html>"""
-        write_text(out_path, html)
+        write_text(out_path, briefing_html)
         span.set_attribute("sent", sent)
         span.set_attribute("drafts", drafts)
         span.set_attribute("failed", len(failed))
@@ -949,7 +991,7 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
                 run_id = str(state.get("run_id", "run"))
                 bpath = briefing_blob_path(run_id)
                 briefing_blob_url = c.blob_store.upload_file(
-                    "calorch-outputs", bpath, out_path,
+                    c.blob_store.output_container, bpath, out_path,
                     content_type="text/html",
                     metadata={"run_id": run_id},
                 )
@@ -973,4 +1015,4 @@ def aggregate_briefing(state: OrchestratorState, config: Optional[RunnableConfig
 # Helpers
 # ---------------------------------------------------------------------------
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)

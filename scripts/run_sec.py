@@ -15,9 +15,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -31,9 +30,7 @@ from calorch.state import OrchestratorState
 from calorch.tools import (
     LocalOneDriveClient,
     JsonRepository,
-    make_graph_client,
     make_sec_calendar_client,
-    to_calendar_event,
     _EnterpriseDataClientImpl,
 )
 
@@ -66,10 +63,10 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.start and args.end:
-        start = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
-        end = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
+        start = datetime.fromisoformat(args.start).replace(tzinfo=UTC)
+        end = datetime.fromisoformat(args.end).replace(tzinfo=UTC)
     else:
-        end = datetime.now(tz=timezone.utc)
+        end = datetime.now(tz=UTC)
         start = end - timedelta(days=args.days)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s | %(message)s")
@@ -102,7 +99,7 @@ def main() -> int:
         "window_start": start,
         "window_end": end,
         "use_mocks": False,
-        "run_id": "sec-" + datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "run_id": "sec-" + datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ"),
         "send_emails": args.send,
     }
     log.info("running orchestrator over %s → %s", start, end)
@@ -122,13 +119,13 @@ def main() -> int:
     print("\n=== SEC RUN SUMMARY ===")
     print(f"window      : {start.date()} -> {end.date()}")
     print(f"filings     : {len(events)}")
-    print(f"by form     :")
+    print("by form     :")
     by_form: dict[str, int] = {}
     for raw in result.get("raw_events", []):
         by_form[raw.get("_form", "?")] = by_form.get(raw.get("_form", "?"), 0) + 1
     for f, n in sorted(by_form.items(), key=lambda x: -x[1]):
         print(f"  · {f:<8}  {n}")
-    print(f"\nclassifications:")
+    print("\nclassifications:")
     for ev_id, cls in classifications.items():
         raw = next((r for r in result.get("raw_events", []) if r.get("id") == ev_id), {})
         ticker = raw.get("_ticker", "?")

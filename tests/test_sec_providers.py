@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from calorch.sec_efts import EftsHit, SecEftsClient
-from calorch.sec_ixbrl import SecIxbrlClient, SegmentFact, _strip_ns, _to_float
+from calorch.sec_ixbrl import SecIxbrlClient, _strip_ns, _to_float
 from calorch.sec import SecEdgarClient
 
 

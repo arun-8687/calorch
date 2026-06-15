@@ -1,9 +1,8 @@
 """State adapter for Azure Durable Functions.
 
-Converts between LangGraph ``OrchestratorState`` (TypedDict + Pydantic models)
-and JSON-serializable dicts suitable for ADF activity input/output.
-
-All datetime objects are ISO-8601 strings. Pydantic models use ``model_dump()``.
+Converts between LangGraph ``OrchestratorState`` objects (TypedDict +
+Pydantic models) and JSON-serializable dicts suitable for ADF activity
+input/output. All datetimes are ISO-8601 strings on the wire.
 """
 from __future__ import annotations
 
@@ -12,17 +11,20 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from calorch.state import CalendarEvent, ClassificationResult
+
 
 # ---------------------------------------------------------------------------
 # Serialization
 # ---------------------------------------------------------------------------
-def serialize_state(state: Any) -> dict[str, Any]:
-    """Convert a LangGraph state object to a JSON-serializable dict.
+def serialize_state(state: Any) -> Any:
+    """Convert a LangGraph state object to a JSON-serializable value.
 
     Handles:
       * Pydantic BaseModel → model_dump(mode="json")
       * datetime → ISO-8601 string
-      * dict/list/str/int/float/bool/None → passthrough
+      * dict/list → recursed
+      * str/int/float/bool/None → passthrough
     """
     if state is None:
         return None
@@ -43,20 +45,19 @@ def serialize_state(state: Any) -> dict[str, Any]:
 # Deserialization
 # ---------------------------------------------------------------------------
 def deserialize_state(data: Any, target_type: type | None = None) -> Any:
-    """Convert a JSON-serializable dict back to LangGraph state objects.
+    """Convert a JSON-serializable value back to LangGraph state objects.
 
     If *target_type* is a Pydantic model class, reconstructs the model.
-    Otherwise returns a plain dict/list.
+    ISO-8601 strings become datetimes; other values pass through.
     """
     if data is None:
         return None
     if isinstance(data, str):
-        # Try to parse ISO-8601 datetime
-        try:
-            if "T" in data:
+        if "T" in data:
+            try:
                 return datetime.fromisoformat(data.replace("Z", "+00:00"))
-        except ValueError:
-            pass
+            except ValueError:
+                pass
         return data
     if isinstance(data, list):
         return [deserialize_state(item) for item in data]
@@ -65,3 +66,30 @@ def deserialize_state(data: Any, target_type: type | None = None) -> Any:
             return target_type.model_validate(data)
         return {k: deserialize_state(v) for k, v in data.items()}
     return data
+
+
+# ---------------------------------------------------------------------------
+# Typed helpers used by activities
+# ---------------------------------------------------------------------------
+def parse_iso(value: Any) -> Any:
+    """Parse an ISO-8601 string to datetime; pass datetimes through."""
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value
+
+
+def parse_event(data: Any) -> CalendarEvent:
+    """Rehydrate a CalendarEvent from an activity-input dict."""
+    if isinstance(data, CalendarEvent):
+        return data
+    data = dict(data)
+    for key in ("start", "end"):
+        data[key] = parse_iso(data.get(key))
+    return CalendarEvent.model_validate(data)
+
+
+def parse_classification(data: Any) -> ClassificationResult:
+    """Rehydrate a ClassificationResult from an activity-input dict."""
+    if isinstance(data, ClassificationResult):
+        return data
+    return ClassificationResult.model_validate(data)

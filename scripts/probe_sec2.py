@@ -1,13 +1,13 @@
 import json
 from calorch.config import get_settings
 from calorch.sec import SecEdgarClient
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 
 s = get_settings()
 print('user_agent:', s.sec_user_agent)
 print('watchlist:', s.sec_watchlist)
 sec = SecEdgarClient(user_agent=s.sec_user_agent, cache_dir=s.sec_cache_dir)
-end = datetime.now(timezone.utc)
+end = datetime.now(UTC)
 start = end - timedelta(days=7)
 print(f'window: {start.date()} -> {end.date()}')
 events = sec.list_recent_filings(s.sec_watchlist, start.date(), end.date())

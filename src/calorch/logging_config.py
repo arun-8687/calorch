@@ -1,8 +1,8 @@
 """Structured JSON logging with request ID correlation and PII redaction.
 
 Production logging for calorch. Emits one JSON object per log line to stdout,
-so Azure Container Apps log streaming / Log Analytics / Datadog can ingest
-records without a custom parser.
+so Application Insights / Log Analytics / Datadog can ingest records without a
+custom parser.
 
 Features:
   * JSON formatter (timestamp, level, logger, message, request_id, run_id,
@@ -24,7 +24,7 @@ import socket
 import sys
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 
 
@@ -86,6 +86,10 @@ _PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b
 _ACCOUNT_RE = re.compile(r"\b\d{8,17}\b")  # bank account / routing numbers
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+")
 _API_KEY_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password)[\"'\s:=]+([A-Za-z0-9._\-]{8,})")
+# Azure storage / SAS connection-string secrets (e.g. AccountKey=…, sig=…).
+_AZURE_SECRET_RE = re.compile(
+    r"(?i)(AccountKey|SharedAccessSignature|sig)=([A-Za-z0-9%+/_\-]{8,})"
+)
 
 # Calendar body PII — only used when message key is 'body' or 'body_preview'
 _BODY_KEYS = frozenset({"body", "body_preview", "bodyPreview", "description"})
@@ -101,6 +105,7 @@ def _redact_string(s: str) -> str:
     s = _PHONE_RE.sub(_REDACTION, s)
     s = _BEARER_RE.sub(rf"\1{_REDACTION}", s)
     s = _API_KEY_RE.sub(rf"\1={_REDACTION}", s)
+    s = _AZURE_SECRET_RE.sub(rf"\1={_REDACTION}", s)
     return s
 
 
@@ -141,7 +146,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -234,7 +239,7 @@ def configure_logging(
         handler.setFormatter(TextFormatter())
 
     root = logging.getLogger()
-    # Remove any existing handlers (e.g. uvicorn's default)
+    # Remove any existing handlers (e.g. the Functions host's default)
     for h in list(root.handlers):
         root.removeHandler(h)
     root.addHandler(handler)

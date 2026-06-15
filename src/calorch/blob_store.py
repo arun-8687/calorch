@@ -1,7 +1,7 @@
 """Azure Blob Storage integration for input and output persistence.
 
 Two blob categories:
-  * **inputs/**  — raw provider responses (SEC, FRED, Tiingo, etc.)
+  * **inputs/**  — raw provider responses (SEC EDGAR, AlphaSense)
   * **outputs/** — generated artefacts (DOCX, HTML, briefings)
 
 Path conventions:
@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -37,6 +37,10 @@ _BLOB_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 # ---------------------------------------------------------------------------
 @runtime_checkable
 class BlobStore(Protocol):
+    # Configured container names so callers never hardcode literals.
+    input_container: str
+    output_container: str
+
     def upload_bytes(
         self,
         container: str,
@@ -100,7 +104,7 @@ class AzureBlobStore:
 
     Connection can be via:
       * Connection string  (``AZURE_STORAGE_CONNECTION_STRING``)
-      * Account URL + DefaultAzureCredential (managed identity on ACA)
+      * Account URL + DefaultAzureCredential (managed identity)
     """
 
     def __init__(
@@ -112,7 +116,7 @@ class AzureBlobStore:
         output_container: str = "calorch-outputs",
     ) -> None:
         try:
-            from azure.storage.blob import ContainerClient
+            from azure.storage.blob import ContainerClient  # noqa: F401  (availability probe)
             from azure.identity import DefaultAzureCredential
         except ImportError as exc:
             raise ImportError(
@@ -133,6 +137,8 @@ class AzureBlobStore:
                 "for AzureBlobStore."
             )
 
+        self.input_container = input_container
+        self.output_container = output_container
         self._input_container = input_container
         self._output_container = output_container
         self._containers_cache: set[str] = set()
@@ -196,7 +202,7 @@ class AzureBlobStore:
         overwrite: bool = True,
     ) -> str:
         data = json.dumps(obj, indent=2, default=str, ensure_ascii=False).encode("utf-8")
-        md = {"uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT)}
+        md = {"uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT)}
         if metadata:
             md.update(metadata)
         return self.upload_bytes(
@@ -222,7 +228,7 @@ class AzureBlobStore:
         ):
             data = local_path.read_bytes()
             md = {
-                "uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT),
+                "uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT),
                 "original_filename": local_path.name,
             }
             if metadata:
@@ -274,9 +280,17 @@ class LocalBlobStore:
     Layout:  ``<root>/<container>/<blob_name>``
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        input_container: str = "calorch-inputs",
+        output_container: str = "calorch-outputs",
+    ) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
+        self.input_container = input_container
+        self.output_container = output_container
 
     def _path(self, container: str, blob_name: str) -> Path:
         p = self._root / container / blob_name
@@ -312,7 +326,7 @@ class LocalBlobStore:
         metadata: dict[str, str] | None = None,
         overwrite: bool = True,
     ) -> str:
-        md = {"uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT)}
+        md = {"uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT)}
         if metadata:
             md.update(metadata)
         data = json.dumps(obj, indent=2, default=str, ensure_ascii=False).encode("utf-8")
@@ -333,7 +347,7 @@ class LocalBlobStore:
             return p.as_uri()
         shutil.copy2(local_path, p)
         md = {
-            "uploaded_at": datetime.now(tz=timezone.utc).strftime(_BLOB_TIMESTAMP_FORMAT),
+            "uploaded_at": datetime.now(tz=UTC).strftime(_BLOB_TIMESTAMP_FORMAT),
             "original_filename": local_path.name,
         }
         if metadata:
@@ -378,6 +392,9 @@ class NullBlobStore:
     """No-op blob store. All uploads succeed (returning empty string),
     all downloads return None, all existence checks return False.
     """
+
+    input_container = "calorch-inputs"
+    output_container = "calorch-outputs"
 
     def upload_bytes(self, container, blob_name, data, *, content_type="application/octet-stream", metadata=None, overwrite=True) -> str:
         log.debug("null blob store: upload_bytes %s/%s (%d bytes) skipped", container, blob_name, len(data))
@@ -454,6 +471,8 @@ def make_blob_store(
     connection_string: str | None = None,
     account_url: str | None = None,
     local_root: Path | None = None,
+    input_container: str = "calorch-inputs",
+    output_container: str = "calorch-outputs",
 ) -> BlobStore:
     """Create the appropriate BlobStore based on configuration.
 
@@ -463,10 +482,11 @@ def make_blob_store(
       3. ``local_root`` → LocalBlobStore (dev/testing)
       4. Otherwise → NullBlobStore
     """
+    containers = {"input_container": input_container, "output_container": output_container}
     if connection_string:
-        return AzureBlobStore(connection_string=connection_string)
+        return AzureBlobStore(connection_string=connection_string, **containers)
     if account_url:
-        return AzureBlobStore(account_url=account_url)
+        return AzureBlobStore(account_url=account_url, **containers)
     if local_root:
-        return LocalBlobStore(local_root)
+        return LocalBlobStore(local_root, **containers)
     return NullBlobStore()

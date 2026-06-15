@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 # Try to import the OTel API. If unavailable, fall back to a no-op tracer.
 try:
@@ -192,18 +193,6 @@ def instrument_httpx() -> bool:
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument()
-        return True
-    except Exception:
-        return False
-
-
-def instrument_fastapi(app: Any) -> bool:
-    """Patch a FastAPI app to emit SERVER spans. Returns True if successful."""
-    if not _OTEL_AVAILABLE:
-        return False
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        FastAPIInstrumentor.instrument_app(app)
         return True
     except Exception:
         return False

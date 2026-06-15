@@ -21,7 +21,7 @@ HTML_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>calorch — Solution Architecture (Azure Container Apps)</title>
+<title>calorch — Solution Architecture (Azure Durable Functions)</title>
 <style>
   :root {{
     --bg: #0f172a;

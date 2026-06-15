@@ -1,7 +1,6 @@
 """Tests for structured JSON logging, PII redaction, and request ID correlation."""
 from __future__ import annotations
 
-import io
 import json
 import logging
 import re
@@ -243,3 +242,35 @@ def test_get_logger_returns_configured_logger():
     log = get_logger("calorch.test")
     assert log.name == "calorch.test"
     assert log.level <= logging.INFO or logging.getLogger().level <= logging.INFO
+
+
+def test_redact_string_strips_azure_connection_string_key():
+    """SEC-8: AccountKey / SAS secrets in connection strings are redacted."""
+    s = "DefaultEndpointsProtocol=https;AccountName=foo;AccountKey=AbCd1234XYZ+/secret==;EndpointSuffix=core.windows.net"
+    out = _redact_string(s)
+    assert "AbCd1234XYZ" not in out
+    assert "[REDACTED]" in out
+    sas = "https://x.blob.core.windows.net/c?sig=abc123DEF456ghiJKL789&se=2026"
+    assert "abc123DEF456" not in _redact_string(sas)
+
+
+def test_configure_logging_installs_redacting_json_handler(monkeypatch):
+    """SEC-1: configure_logging(fmt=json) installs a single redacting handler."""
+    import calorch.logging_config as lc
+
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    try:
+        monkeypatch.setattr(lc, "_configured", False)
+        lc.configure_logging(fmt="json")
+        assert len(root.handlers) == 1
+        fmt = root.handlers[0].formatter
+        assert isinstance(fmt, lc.JsonFormatter)
+        rec = logging.LogRecord(
+            "t", logging.INFO, __file__, 1, "contact a@b.com Bearer xyz12345", None, None
+        )
+        out = fmt.format(rec)
+        assert "a@b.com" not in out and "xyz12345" not in out and "[REDACTED]" in out
+    finally:
+        root.handlers[:] = saved
+        monkeypatch.setattr(lc, "_configured", True)

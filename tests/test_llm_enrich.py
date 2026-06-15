@@ -1,7 +1,6 @@
 """Tests for the LLM enrichment layer."""
 from __future__ import annotations
 
-import pytest
 
 from calorch.llm import MockChatModel
 from calorch.llm_enrich import LlmEnricher, NoOpEnricher
