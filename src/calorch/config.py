@@ -92,6 +92,13 @@ class Settings:
     narrative_backend: str        # "auto" (default) | "sec" | "alphasense"
     sentiment_backend: str        # "auto" (default) | "lexicon" | "alphasense"
 
+    # Guidance-snippet extraction on the SEC narrative path, at ingestion
+    # time only. "auto" (default) uses the LLM when a real chat model is
+    # configured (not USE_MOCKS, and an Azure OpenAI or Opencode Go key is
+    # set), else falls back to the deterministic keyword heuristic. Force
+    # a specific extractor with "llm" or "heuristic".
+    guidance_extractor: str       # "auto" (default) | "llm" | "heuristic"
+
     use_mocks: bool
     output_dir: Path
 
@@ -150,6 +157,7 @@ def get_settings() -> Settings:
         use_alphasense=_bool("USE_ALPHASENSE", True),
         narrative_backend=(_env("NARRATIVE_BACKEND", "auto") or "auto").lower(),
         sentiment_backend=(_env("SENTIMENT_BACKEND", "auto") or "auto").lower(),
+        guidance_extractor=(_env("GUIDANCE_EXTRACTOR", "auto") or "auto").lower(),
         use_mocks=_bool("USE_MOCKS", True),
         output_dir=Path(_env("OUTPUT_DIR", "./out") or "./out"),
         langsmith_api_key=_env("LANGSMITH_API_KEY"),

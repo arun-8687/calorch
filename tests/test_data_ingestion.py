@@ -203,3 +203,112 @@ def test_ingest_qualitative_degrades_on_narrative_exception(
     assert result["status"] == "error"
     assert result["ticker"] == "AAPL"
     assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# LLM-based guidance-snippet refinement (SEC narrative path only)
+# ---------------------------------------------------------------------------
+_GUIDANCE_FULL_TEXT = (
+    "Apple today announced financial results. "
+    "We expect continued strong growth in fiscal 2026. "
+    "The Board of Directors declared a dividend."
+)
+
+
+class _StubSecNarrativeClientForGuidance:
+    def __init__(self, user_agent: str, cache_dir: Path | None = None) -> None:
+        self.user_agent = user_agent
+        self.cache_dir = cache_dir
+
+    def narrative_docs(self, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]:
+        return [{
+            "title": f"{ticker} 8-K press release", "date": "2026-04-30", "type": "8-K",
+            "company": ticker, "ticker": ticker, "sentiment": None, "source": "sec-filings",
+            "doc_id": "0000320193-26-000011", "snippet": "heuristic fallback snippet",
+        }]
+
+    def full_texts(self, ticker: str, *, limit: int = 3) -> list[dict[str, Any]]:
+        return [{"title": f"{ticker} 8-K", "date": "2026-04-30", "type": "8-K", "text": _GUIDANCE_FULL_TEXT}]
+
+
+class _FakeAIMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _FakeChatModel:
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+        self.prompts: list[str] = []
+
+    def invoke(self, prompt: Any, *args: Any, **kwargs: Any) -> _FakeAIMessage:
+        self.prompts.append(prompt)
+        return _FakeAIMessage(self._reply)
+
+
+def test_llm_guidance_extraction_replaces_snippet_and_tags_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import calorch.llm as llm_mod
+    import calorch.sec_narrative as sec_narrative_mod
+
+    monkeypatch.setattr(sec_narrative_mod, "SecNarrativeClient", _StubSecNarrativeClientForGuidance)
+    verbatim_reply = "We expect continued strong growth in fiscal 2026."
+    fake_model = _FakeChatModel(verbatim_reply)
+    monkeypatch.setattr(llm_mod, "get_chat_model", lambda settings: fake_model)
+
+    pipeline = _pipeline(tmp_path, narrative_backend="sec", sentiment_backend="lexicon", guidance_extractor="llm")
+
+    result = pipeline.ingest_qualitative("AAPL")
+
+    assert result["status"] == "ok"
+    narrative = pipeline._blob.download_json(pipeline._blob.input_container, "inputs/narrative/AAPL/20260711.json")
+    assert narrative[0]["snippet"] == verbatim_reply
+    assert narrative[0]["snippet_source"] == "llm"
+    assert fake_model.prompts  # the chat model was actually invoked
+
+
+def test_llm_guidance_extraction_guard_failure_keeps_heuristic_snippet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import calorch.llm as llm_mod
+    import calorch.sec_narrative as sec_narrative_mod
+
+    monkeypatch.setattr(sec_narrative_mod, "SecNarrativeClient", _StubSecNarrativeClientForGuidance)
+    hallucinated_reply = "Totally fabricated commentary that appears nowhere in the filing."
+    fake_model = _FakeChatModel(hallucinated_reply)
+    monkeypatch.setattr(llm_mod, "get_chat_model", lambda settings: fake_model)
+
+    pipeline = _pipeline(tmp_path, narrative_backend="sec", sentiment_backend="lexicon", guidance_extractor="llm")
+
+    result = pipeline.ingest_qualitative("AAPL")
+
+    assert result["status"] == "ok"
+    narrative = pipeline._blob.download_json(pipeline._blob.input_container, "inputs/narrative/AAPL/20260711.json")
+    assert narrative[0]["snippet"] == "heuristic fallback snippet"
+    assert narrative[0]["snippet_source"] == "heuristic"
+
+
+def test_heuristic_extractor_never_builds_chat_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import calorch.llm as llm_mod
+    import calorch.sec_narrative as sec_narrative_mod
+
+    monkeypatch.setattr(sec_narrative_mod, "SecNarrativeClient", _StubSecNarrativeClientForGuidance)
+
+    def _boom(settings: Any) -> Any:
+        raise AssertionError("get_chat_model should not be called when guidance_extractor=heuristic")
+
+    monkeypatch.setattr(llm_mod, "get_chat_model", _boom)
+
+    pipeline = _pipeline(
+        tmp_path, narrative_backend="sec", sentiment_backend="lexicon", guidance_extractor="heuristic"
+    )
+
+    result = pipeline.ingest_qualitative("AAPL")
+
+    assert result["status"] == "ok"
+    narrative = pipeline._blob.download_json(pipeline._blob.input_container, "inputs/narrative/AAPL/20260711.json")
+    assert narrative[0]["snippet"] == "heuristic fallback snippet"
+    assert narrative[0]["snippet_source"] == "heuristic"

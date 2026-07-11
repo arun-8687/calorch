@@ -20,13 +20,19 @@ Usage (Azure Durable Functions activity):
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, UTC
 from typing import Any
 
 from calorch.blob_store import BlobStore, make_blob_store
 from calorch.config import get_settings
+from calorch.guidance_extract import llm_guidance_snippet, resolve_extractor
 
 log = logging.getLogger("calorch.data_ingestion")
+
+# Sentinel distinguishing "guidance chat model not built yet" from "built and
+# it's None" (i.e. construction failed) — see `IngestionPipeline._guidance_invoke`.
+_UNSET = object()
 
 
 
@@ -70,6 +76,7 @@ class IngestionPipeline:
         self._date = date or _today()
         self._s = get_settings()
         self._log: list[str] = []
+        self._guidance_invoke_fn: Callable[[str], str] | None | object = _UNSET
 
     # -- AlphaSense: narrative + transcripts + sentiment ------------------
     def _alphasense(self) -> Any:
@@ -130,6 +137,66 @@ class IngestionPipeline:
             user_agent=self._s.sec_user_agent, cache_dir=self._s.sec_cache_dir / "narrative"
         )
 
+    # -- optional LLM-based guidance-snippet refinement (SEC path only) ---
+    def _guidance_invoke(self) -> Callable[[str], str] | None:
+        """Lazily build the ingestion-time guidance-extraction chat model.
+
+        Built at most once per pipeline instance (`self._guidance_invoke_fn`
+        caches the result — including a failure, which is cached as `None`
+        so we don't retry construction, and thus keep the heuristic snippet
+        for the rest of this run, on every subsequent ticker).
+        """
+        if self._guidance_invoke_fn is _UNSET:
+            try:
+                from calorch.llm import get_chat_model
+
+                model = get_chat_model(self._s)
+
+                def _invoke(prompt: str) -> str:
+                    return str(model.invoke(prompt).content)
+
+                self._guidance_invoke_fn = _invoke
+            except Exception as e:  # noqa: BLE001 - defensive: degrade to heuristic, never raise
+                log.warning(
+                    "Guidance-extraction chat model unavailable, falling back to heuristic "
+                    "snippets for this ingestion run: %s", e,
+                )
+                self._guidance_invoke_fn = None
+        return self._guidance_invoke_fn  # type: ignore[return-value]
+
+    def _apply_llm_guidance(self, ticker: str, narrative: list[dict[str, Any]], sec_client: Any) -> None:
+        """LLM-refine each SEC narrative hit's `snippet`, in place.
+
+        Every hit is tagged with `snippet_source` ("llm" or "heuristic").
+        Falls back to the heuristic snippet already on the hit (set by
+        `sec_client.narrative_docs`) whenever the extractor resolves to
+        "heuristic", the chat model can't be built, the full text for a doc
+        is unavailable, or a given doc's LLM reply fails the verbatim guard.
+        """
+        for hit in narrative:
+            hit.setdefault("snippet_source", "heuristic")
+        if not narrative or resolve_extractor(self._s) != "llm":
+            return
+
+        invoke = self._guidance_invoke()
+        if invoke is None:
+            return
+
+        try:
+            texts = sec_client.full_texts(ticker, limit=len(narrative))
+        except Exception as e:  # noqa: BLE001 - defensive: degrade to heuristic, never raise
+            log.warning("Guidance-extraction full-text fetch failed for %s: %s", ticker, e)
+            return
+
+        for hit, doc in zip(narrative, texts, strict=False):
+            full_text = doc.get("text", "")
+            if not full_text:
+                continue
+            refined = llm_guidance_snippet(full_text, ticker, invoke)
+            if refined:
+                hit["snippet"] = refined
+                hit["snippet_source"] = "llm"
+
     def ingest_qualitative(self, ticker: str, alphasense_client: Any | None = None) -> dict[str, Any]:
         """Ingest narrative + sentiment for one ticker, backend-selectable.
 
@@ -160,6 +227,7 @@ class IngestionPipeline:
                 narrative = alphasense.guidance_hits(ticker, limit=10) if alphasense else []
             else:
                 narrative = sec_client.narrative_docs(ticker, limit=10) if sec_client else []
+                self._apply_llm_guidance(ticker, narrative, sec_client)
         except Exception as e:
             log.warning("Qualitative narrative ingestion failed for %s: %s", ticker, e)
             return {"status": "error", "ticker": ticker, "error": str(e)}

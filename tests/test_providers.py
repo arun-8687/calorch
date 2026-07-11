@@ -61,6 +61,7 @@ def base_settings() -> Settings:
         use_alphasense=True,
         narrative_backend="auto",
         sentiment_backend="auto",
+        guidance_extractor="auto",
         use_mocks=True,
         output_dir=Path("./out"),
         langsmith_api_key=None,

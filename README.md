@@ -123,6 +123,18 @@ Loughran-McDonald dictionary) — `(pos - neg) / (pos + neg)` per text, same
 `transcripts` has no free equivalent and stays AlphaSense-only — empty when
 unconfigured, same as before.
 
+On the SEC narrative path, ingestion can optionally refine each snippet with
+an LLM (`GUIDANCE_EXTRACTOR`, default `"auto"`) instead of the keyword
+heuristic — the model is asked to quote verbatim the guidance-relevant
+sentences from the same filing text, which reads much better for issuers
+like Apple that give prose outlook rather than formal numeric guidance.
+"auto" only turns this on when a real chat model is configured (not
+`USE_MOCKS`, with an Azure OpenAI or Opencode Go key); a verbatim guard
+rejects any reply that doesn't actually quote the source text, falling back
+to the heuristic snippet per-doc. This runs once at ingestion time and is
+baked into the narrative blob — the live provider path and demo mode are
+unaffected and always use the heuristic.
+
 ### Provider Contract
 
 ```python

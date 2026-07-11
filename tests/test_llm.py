@@ -49,6 +49,7 @@ def _settings(**kw) -> Settings:
         "use_alphasense": True,
         "narrative_backend": "auto",
         "sentiment_backend": "auto",
+        "guidance_extractor": "auto",
         "use_mocks": True,
         "output_dir": MagicMock(),
         "langsmith_api_key": None,
