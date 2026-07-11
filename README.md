@@ -95,6 +95,19 @@ All data flows through a **Protocol-based provider layer** (`src/calorch/provide
 > market-data vendors (Tiingo / FRED / FOMC H.15) that are out of scope. Those
 > fields render as "—".
 
+**SEC backend.** `fundamentals` is backed by `SecIxbrlClient` (native SEC
+iXBRL companyfacts parser) by default. Setting `SEC_BACKEND=edgartools`
+swaps it for `EdgarToolsClient` (`src/calorch/sec_edgartools.py`), a thin
+wrapper over the [edgartools](https://github.com/dgunning/edgartools)
+library — same `latest_fundamentals(cik, ticker)` output contract, so the
+rest of the pipeline (templates, tables, blob ingestion) is unaffected. It
+requires the optional `edgar` extra (`pip install calorch[edgar]`); if
+that's not installed, both `providers.build_providers` and
+`calorch.data_ingestion` log a warning and fall back to the native client
+automatically. `segments` and `filings` always use the native SEC clients —
+edgartools has no equivalent for iXBRL segment extraction or EFTS full-text
+search.
+
 ### Provider Contract
 
 ```python
@@ -325,6 +338,7 @@ calorch/
 │   ├── blob_store.py                 # Azure Blob Storage (inputs/outputs) + local fallback
 │   ├── tools.py                      # GraphClient, OneDrive, Repository, make_providers
 │   ├── sec.py / sec_ixbrl.py / sec_efts.py  # SEC EDGAR clients
+│   ├── sec_edgartools.py             # Opt-in edgartools fundamentals backend (SEC_BACKEND=edgartools)
 │   ├── alphasense.py                 # AlphaSense client (guidance/transcripts/sentiment)
 │   └── cli.py                        # `calorch run / summary / serve` (serve = langgraph dev)
 ├── tests/                            # tests (test_durable, test_agents, test_graph, …)
@@ -399,6 +413,7 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `SEC_WATCHLIST` | No | Ingestion tickers (default 10 mega-caps) |
 | `ALPHASENSE_API_KEY` (+ `_CLIENT_ID`/`_CLIENT_SECRET`/`_USERNAME`/`_PASSWORD`) | No | AlphaSense guidance/transcripts/sentiment; empty disables (degrades to empty) |
 | `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` / `USE_ALPHASENSE` | No | Toggle data sources (default `true`) |
+| `SEC_BACKEND` | No | `native` (SEC iXBRL companyfacts, default) or `edgartools` (opt-in, requires `pip install calorch[edgar]`; falls back to `native` if not installed) |
 | `USE_MOCKS` | No | `true` = MockChatModel + seed events (default `true`) |
 | `CALORCH_AGENT_MODULES` | No | Comma-separated import paths of out-of-tree agent modules |
 | `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` / `LANGSMITH_TRACING` | No | LangSmith tracing of agent subgraphs |

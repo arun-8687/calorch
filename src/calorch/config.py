@@ -76,6 +76,7 @@ class Settings:
     sec_forms: list[str] | None
     use_ixbrl_segments: bool
     use_sec_efts: bool
+    sec_backend: str             # "native" (default) or "edgartools" (opt-in, requires calorch[edgar])
 
     # AlphaSense (qualitative: guidance, transcripts/expert calls, sentiment)
     alphasense_api_key: str | None
@@ -134,6 +135,7 @@ def get_settings() -> Settings:
         sec_forms=_csv("SEC_FORMS", None) or None,
         use_ixbrl_segments=_bool("USE_IXBRL_SEGMENTS", True),
         use_sec_efts=_bool("USE_SEC_EFTS", True),
+        sec_backend=(_env("SEC_BACKEND", "native") or "native").lower(),
         alphasense_api_key=_env("ALPHASENSE_API_KEY"),
         alphasense_client_id=_env("ALPHASENSE_CLIENT_ID"),
         alphasense_client_secret=_env("ALPHASENSE_CLIENT_SECRET"),

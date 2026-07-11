@@ -216,6 +216,9 @@ def _build_live_providers(settings: Any) -> ProviderBundle:
     sources: list[dict[str, str]] = []
 
     # ---- SEC iXBRL: fundamentals + segments ----
+    # `fundamentals` alone can be swapped to the opt-in edgartools backend
+    # (SEC_BACKEND=edgartools); segments stay on the native iXBRL client
+    # regardless, since edgartools has no equivalent segment extraction.
     ixbrl = None
     if getattr(settings, "use_ixbrl_segments", True):
         try:
@@ -224,6 +227,22 @@ def _build_live_providers(settings: Any) -> ProviderBundle:
                             "detail": "Fundamentals + product/geographic segments"})
         except (OSError, ValueError, ImportError) as e:
             sources.append({"source_name": "SEC iXBRL", "status": "error", "detail": str(e)})
+
+    fundamentals_client = ixbrl
+    if getattr(settings, "sec_backend", "native") == "edgartools":
+        try:
+            from .sec_edgartools import EdgarToolsClient
+
+            fundamentals_client = EdgarToolsClient(
+                user_agent=settings.sec_user_agent, cache_dir=settings.sec_cache_dir / "edgartools"
+            )
+            sources.append({"source_name": "SEC edgartools", "status": "active",
+                            "detail": "Fundamentals (opt-in backend, SEC_BACKEND=edgartools)"})
+        except ImportError as e:
+            log.warning("SEC_BACKEND=edgartools but edgartools is not installed, "
+                        "falling back to native iXBRL fundamentals: %s", e)
+            sources.append({"source_name": "SEC edgartools", "status": "error",
+                            "detail": f"edgartools not installed, using native fallback: {e}"})
 
     # ---- SEC EFTS: filing full-text search ----
     efts = None
@@ -238,7 +257,7 @@ def _build_live_providers(settings: Any) -> ProviderBundle:
     alphasense = _build_alphasense(settings, sources)
 
     return ProviderBundle(
-        fundamentals=IxbrlFundamentalsProvider(ixbrl=ixbrl),
+        fundamentals=IxbrlFundamentalsProvider(ixbrl=fundamentals_client),
         segments=IxbrlSegmentProvider(ixbrl=ixbrl),
         filings=EftsFilingsProvider(efts=efts),
         narrative=AlphaSenseNarrativeProvider(client=alphasense),

@@ -55,6 +55,9 @@ azure = [
   "azure-functions>=1.21,<2.0",
   "azure-functions-durable>=1.5",
 ]
+edgar = [
+  "edgartools>=5.40",
+]
 
 [project.scripts]
 calorch = "calorch.cli:main"

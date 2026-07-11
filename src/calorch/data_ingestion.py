@@ -112,16 +112,30 @@ class IngestionPipeline:
         return {"status": "ok", "ticker": ticker}
 
 
-    # -- Fundamentals: SEC iXBRL ------------------------------------------
-    def ingest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
-        """Ingest SEC iXBRL fundamentals for one ticker."""
+    # -- Fundamentals: SEC iXBRL (or edgartools, opt-in via SEC_BACKEND) ---
+    def _fundamentals_client(self) -> Any:
+        """Build the fundamentals client per SEC_BACKEND, falling back to native on ImportError."""
+        if self._s.sec_backend == "edgartools":
+            try:
+                from calorch.sec_edgartools import EdgarToolsClient
+
+                return EdgarToolsClient(
+                    user_agent=self._s.sec_user_agent, cache_dir=self._s.sec_cache_dir / "edgartools"
+                )
+            except ImportError as e:
+                log.warning("SEC_BACKEND=edgartools but edgartools is not installed, "
+                            "falling back to native iXBRL fundamentals: %s", e)
         from calorch.sec_ixbrl import SecIxbrlClient
 
+        return SecIxbrlClient(user_agent=self._s.sec_user_agent, cache_dir=self._s.sec_cache_dir / "ixbrl")
+
+    def ingest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+        """Ingest SEC fundamentals for one ticker."""
         try:
-            client = SecIxbrlClient(user_agent=self._s.sec_user_agent, cache_dir=self._s.sec_cache_dir / "ixbrl")
+            client = self._fundamentals_client()
             fundamentals = client.latest_fundamentals(cik, ticker)
         except Exception as e:
-            log.warning("SEC iXBRL fundamentals ingestion failed for %s: %s", ticker, e)
+            log.warning("SEC fundamentals ingestion failed for %s: %s", ticker, e)
             return {"status": "error", "cik": cik, "ticker": ticker, "error": str(e)}
 
         path = _blob_path("fundamentals", ticker=ticker, cik=cik, date=self._date)

@@ -39,6 +39,7 @@ def _settings(**kw) -> Settings:
         "sec_forms": None,
         "use_ixbrl_segments": True,
         "use_sec_efts": True,
+        "sec_backend": "native",
         "alphasense_api_key": None,
         "alphasense_client_id": None,
         "alphasense_client_secret": None,
