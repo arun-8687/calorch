@@ -359,6 +359,8 @@ def base_settings() -> Settings:
         alphasense_password=None,
         alphasense_base_url="https://api.alpha-sense.com",
         use_alphasense=True,
+        narrative_backend="alphasense",
+        sentiment_backend="alphasense",
         use_mocks=True,
         output_dir=Path("./out"),
         langsmith_api_key=None,

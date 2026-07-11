@@ -1,16 +1,25 @@
-"""Data-source provider layer — SEC EDGAR + AlphaSense only.
+"""Data-source provider layer — SEC EDGAR (+ AlphaSense where configured).
 
-Two sources, cleanly split by what each does well:
+Sources, cleanly split by what each does well:
 
-  * **SEC EDGAR** (free, fair-use) — the structured numbers:
+  * **SEC EDGAR** (free, fair-use) — the structured numbers, and (now) the
+    qualitative side too:
       - ``fundamentals`` : SEC iXBRL company facts (revenue, EPS, margins,
         balance sheet, cash flow)
       - ``segments``     : SEC iXBRL product / geographic revenue splits
       - ``filings``      : SEC EFTS full-text filing search (guidance excerpts)
-  * **AlphaSense** (credentialed) — the qualitative side:
-      - ``narrative``    : guidance / outlook excerpts across filings + transcripts
-      - ``transcripts``  : earnings-call / expert-call transcript matches
-      - ``sentiment``    : document-level sentiment (-1..1) for a ticker
+      - ``narrative``    : guidance / outlook excerpts extracted from the
+        latest 8-K press release + 10-Q/10-K MD&A (`sec_narrative.py`)
+      - ``sentiment``    : local finance-lexicon score (-1..1) over those
+        same filing texts (`sentiment_lexicon.py`)
+  * **AlphaSense** (credentialed, optional) — the licensed qualitative side:
+      - ``narrative``, ``transcripts``, ``sentiment``
+
+``narrative``/``sentiment`` are backend-selectable (`NARRATIVE_BACKEND` /
+`SENTIMENT_BACKEND`, default `"auto"` = AlphaSense when configured, else the
+free SEC-derived backend) — see `_build_live_providers`. ``transcripts``
+stays AlphaSense-only; with no AlphaSense credentials it degrades to empty,
+same as today.
 
 There is no price, consensus, or macro provider: those required third-party
 market-data vendors (Tiingo / FRED / FOMC H.15) that are out of scope. A
@@ -179,6 +188,54 @@ class AlphaSenseSentimentProvider:
 
 
 # ---------------------------------------------------------------------------
+# SEC-narrative / lexicon-backed implementations (free AlphaSense replacement
+# for the `narrative` and `sentiment` slots; see `sec_narrative.py` and
+# `sentiment_lexicon.py`). `transcripts` has no SEC-derived equivalent and
+# stays AlphaSense-only.
+# ---------------------------------------------------------------------------
+class SecNarrativeProvider:
+    """Guidance / outlook excerpts extracted from SEC filings.
+
+    Signature mirrors `AlphaSenseNarrativeProvider` (``cik, ticker``); ``cik``
+    is unused (the client keys on ticker).
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._c = client
+
+    def guidance_hits(self, cik: str, ticker: str, *, limit: int = 5) -> list[dict[str, Any]]:
+        if self._c is None:
+            return []
+        try:
+            return self._c.narrative_docs(ticker, limit=limit)
+        except Exception as e:  # noqa: BLE001 - third-party surface, degrade not raise
+            log.warning("SEC narrative guidance_hits failed for %s: %s", ticker, e)
+            return []
+
+
+class LexiconSentimentProvider:
+    """Local finance-lexicon sentiment over the same SEC filing texts."""
+
+    def __init__(self, client: Any) -> None:
+        self._c = client
+
+    def sentiment(self, ticker: str) -> dict[str, Any]:
+        if self._c is None:
+            return {"ticker": ticker, "mean_sentiment": None, "sample": 0, "source": "none",
+                    "note": "SEC narrative client not configured"}
+        try:
+            from .sentiment_lexicon import aggregate
+
+            texts = [doc["text"] for doc in self._c.full_texts(ticker, limit=5)]
+            agg = aggregate(texts)
+            return {"ticker": ticker, "source": "sec-lexicon", **agg}
+        except Exception as e:  # noqa: BLE001 - third-party surface, degrade not raise
+            log.warning("Lexicon sentiment failed for %s: %s", ticker, e)
+            return {"ticker": ticker, "mean_sentiment": None, "sample": 0, "source": "sec-lexicon",
+                    "note": str(e)}
+
+
+# ---------------------------------------------------------------------------
 # Factory — wired at startup
 # ---------------------------------------------------------------------------
 def build_providers(settings: Any) -> ProviderBundle:
@@ -256,15 +313,62 @@ def _build_live_providers(settings: Any) -> ProviderBundle:
     # ---- AlphaSense: narrative + transcripts + sentiment ----
     alphasense = _build_alphasense(settings, sources)
 
+    # ---- narrative / sentiment backend resolution ----
+    narrative_backend = _resolve_backend(
+        getattr(settings, "narrative_backend", "auto"), alphasense_configured=alphasense is not None, fallback="sec"
+    )
+    sentiment_backend = _resolve_backend(
+        getattr(settings, "sentiment_backend", "auto"), alphasense_configured=alphasense is not None,
+        fallback="lexicon",
+    )
+    sources.append({"source_name": "narrative", "status": "active", "detail": f"backend={narrative_backend}"})
+    sources.append({"source_name": "sentiment", "status": "active", "detail": f"backend={sentiment_backend}"})
+
+    sec_narrative_client = None
+    if narrative_backend == "sec" or sentiment_backend == "lexicon":
+        try:
+            from .sec_narrative import SecNarrativeClient
+
+            sec_narrative_client = SecNarrativeClient(
+                user_agent=settings.sec_user_agent, cache_dir=settings.sec_cache_dir / "narrative"
+            )
+            sources.append({"source_name": "SEC narrative", "status": "active",
+                            "detail": "Guidance excerpts from 8-K press release + 10-Q/10-K MD&A"})
+        except ImportError as e:
+            log.warning("SEC narrative backend requires edgartools, which is not installed: %s", e)
+            sources.append({"source_name": "SEC narrative", "status": "error",
+                            "detail": f"edgartools not installed: {e}"})
+
+    narrative_provider: Any = (
+        AlphaSenseNarrativeProvider(client=alphasense) if narrative_backend == "alphasense"
+        else SecNarrativeProvider(client=sec_narrative_client)
+    )
+    sentiment_provider: Any = (
+        AlphaSenseSentimentProvider(client=alphasense) if sentiment_backend == "alphasense"
+        else LexiconSentimentProvider(client=sec_narrative_client)
+    )
+
     return ProviderBundle(
         fundamentals=IxbrlFundamentalsProvider(ixbrl=fundamentals_client),
         segments=IxbrlSegmentProvider(ixbrl=ixbrl),
         filings=EftsFilingsProvider(efts=efts),
-        narrative=AlphaSenseNarrativeProvider(client=alphasense),
+        narrative=narrative_provider,
         transcripts=AlphaSenseTranscriptProvider(client=alphasense),
-        sentiment=AlphaSenseSentimentProvider(client=alphasense),
+        sentiment=sentiment_provider,
         sources=sources,
     )
+
+
+def _resolve_backend(configured: str, *, alphasense_configured: bool, fallback: str) -> str:
+    """Resolve an "auto"/explicit backend setting to a concrete backend name.
+
+    "auto" -> "alphasense" when the shared AlphaSense client was built,
+    else `fallback` (the free backend: "sec" for narrative, "lexicon" for
+    sentiment).
+    """
+    if configured != "auto":
+        return configured
+    return "alphasense" if alphasense_configured else fallback
 
 
 def _build_alphasense(settings: Any, sources: list[dict[str, str]]) -> Any:

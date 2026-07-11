@@ -87,9 +87,9 @@ All data flows through a **Protocol-based provider layer** (`src/calorch/provide
 | `fundamentals` | **SEC iXBRL Company Facts** | Revenue, EPS, margins, ROE/ROA, cash, debt | None (free, ToS-compliant) |
 | `segments` | **SEC iXBRL Instance Docs** | Product + geographic revenue splits (10-Q/10-K) | None (free) |
 | `filings` | **SEC EFTS** | Full-text filing search — guidance excerpts | None (free) |
-| `narrative` | **AlphaSense** | Guidance / outlook across filings + transcripts | API key (OAuth2) |
+| `narrative` | **SEC filings** (default) or AlphaSense | Guidance / outlook excerpts — 8-K press release + 10-Q/10-K MD&A, or AlphaSense's filings+transcripts search | None (free) / API key |
 | `transcripts` | **AlphaSense** | Earnings-call / expert-call transcript matches | API key |
-| `sentiment` | **AlphaSense** | Document-level sentiment (-1..1) per ticker | API key |
+| `sentiment` | **Local lexicon** (default) or AlphaSense | Finance-sentiment-lexicon score (-1..1) over the same SEC filing text, or AlphaSense document sentiment | None (free) / API key |
 
 > There is no price, consensus, or macro provider — those needed third-party
 > market-data vendors (Tiingo / FRED / FOMC H.15) that are out of scope. Those
@@ -107,6 +107,21 @@ that's not installed, both `providers.build_providers` and
 automatically. `segments` and `filings` always use the native SEC clients —
 edgartools has no equivalent for iXBRL segment extraction or EFTS full-text
 search.
+
+**Qualitative backends.** `narrative` and `sentiment` are backend-selectable
+independently (`NARRATIVE_BACKEND` / `SENTIMENT_BACKEND`, default `"auto"`).
+"auto" picks AlphaSense when it's configured, otherwise falls back to a free
+SEC-derived backend: `SecNarrativeClient` (`src/calorch/sec_narrative.py`,
+also built on `edgartools`) pulls guidance-focused excerpts from each
+ticker's latest 8-K press release exhibit and 10-Q MD&A (falling back to the
+10-K MD&A when there's no 10-Q text), using a deterministic keyword
+heuristic — no LLM. `sentiment_lexicon.py` scores that same filing text with
+a small, original finance-tone word list (LM-inspired, not the redistributed
+Loughran-McDonald dictionary) — `(pos - neg) / (pos + neg)` per text, same
+±0.1 label thresholds as AlphaSense. Force a specific backend with
+`NARRATIVE_BACKEND=sec|alphasense` / `SENTIMENT_BACKEND=lexicon|alphasense`.
+`transcripts` has no free equivalent and stays AlphaSense-only — empty when
+unconfigured, same as before.
 
 ### Provider Contract
 
@@ -339,6 +354,8 @@ calorch/
 │   ├── tools.py                      # GraphClient, OneDrive, Repository, make_providers
 │   ├── sec.py / sec_ixbrl.py / sec_efts.py  # SEC EDGAR clients
 │   ├── sec_edgartools.py             # Opt-in edgartools fundamentals backend (SEC_BACKEND=edgartools)
+│   ├── sec_narrative.py              # Free narrative backend — guidance excerpts from SEC filings (edgartools)
+│   ├── sentiment_lexicon.py          # Free sentiment backend — local finance-lexicon scoring
 │   ├── alphasense.py                 # AlphaSense client (guidance/transcripts/sentiment)
 │   └── cli.py                        # `calorch run / summary / serve` (serve = langgraph dev)
 ├── tests/                            # tests (test_durable, test_agents, test_graph, …)
@@ -411,9 +428,10 @@ See `src/calorch/config.py` for the authoritative list and defaults.
 | `OUTPUT_DIR` / `SEC_CACHE_DIR` / `AUDIT_LOG_PATH` | Yes (Azure) | Point at `/tmp/...` — the package mount is read-only |
 | `SEC_USER_AGENT` | Yes (prod) | `"Your Name you@example.com"` — SEC requires a real contact |
 | `SEC_WATCHLIST` | No | Ingestion tickers (default 10 mega-caps) |
-| `ALPHASENSE_API_KEY` (+ `_CLIENT_ID`/`_CLIENT_SECRET`/`_USERNAME`/`_PASSWORD`) | No | AlphaSense guidance/transcripts/sentiment; empty disables (degrades to empty) |
+| `ALPHASENSE_API_KEY` (+ `_CLIENT_ID`/`_CLIENT_SECRET`/`_USERNAME`/`_PASSWORD`) | No | AlphaSense guidance/transcripts/sentiment; empty disables (`transcripts` degrades to empty; `narrative`/`sentiment` fall back to the free SEC backend under `auto`) |
 | `USE_IXBRL_SEGMENTS` / `USE_SEC_EFTS` / `USE_ALPHASENSE` | No | Toggle data sources (default `true`) |
 | `SEC_BACKEND` | No | `native` (SEC iXBRL companyfacts, default) or `edgartools` (opt-in, requires `pip install calorch[edgar]`; falls back to `native` if not installed) |
+| `NARRATIVE_BACKEND` / `SENTIMENT_BACKEND` | No | `auto` (default — AlphaSense when configured, else the free SEC/lexicon backend), or force `sec`\|`alphasense` / `lexicon`\|`alphasense` |
 | `USE_MOCKS` | No | `true` = MockChatModel + seed events (default `true`) |
 | `CALORCH_AGENT_MODULES` | No | Comma-separated import paths of out-of-tree agent modules |
 | `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` / `LANGSMITH_TRACING` | No | LangSmith tracing of agent subgraphs |

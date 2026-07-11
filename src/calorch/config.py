@@ -87,6 +87,11 @@ class Settings:
     alphasense_base_url: str
     use_alphasense: bool
 
+    # Qualitative backend selection: "auto" (AlphaSense when configured, else
+    # the free SEC-derived backend), or force "sec"/"lexicon" vs "alphasense".
+    narrative_backend: str        # "auto" (default) | "sec" | "alphasense"
+    sentiment_backend: str        # "auto" (default) | "lexicon" | "alphasense"
+
     use_mocks: bool
     output_dir: Path
 
@@ -143,6 +148,8 @@ def get_settings() -> Settings:
         alphasense_password=_env("ALPHASENSE_PASSWORD"),
         alphasense_base_url=_env("ALPHASENSE_BASE_URL", "https://api.alpha-sense.com") or "https://api.alpha-sense.com",
         use_alphasense=_bool("USE_ALPHASENSE", True),
+        narrative_backend=(_env("NARRATIVE_BACKEND", "auto") or "auto").lower(),
+        sentiment_backend=(_env("SENTIMENT_BACKEND", "auto") or "auto").lower(),
         use_mocks=_bool("USE_MOCKS", True),
         output_dir=Path(_env("OUTPUT_DIR", "./out") or "./out"),
         langsmith_api_key=_env("LANGSMITH_API_KEY"),

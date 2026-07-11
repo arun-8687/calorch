@@ -47,6 +47,8 @@ def _settings(**kw) -> Settings:
         "alphasense_password": None,
         "alphasense_base_url": "https://api.alpha-sense.com",
         "use_alphasense": True,
+        "narrative_backend": "auto",
+        "sentiment_backend": "auto",
         "use_mocks": True,
         "output_dir": MagicMock(),
         "langsmith_api_key": None,

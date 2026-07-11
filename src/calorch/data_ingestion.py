@@ -111,6 +111,81 @@ class IngestionPipeline:
         self._log.append(f"AlphaSense {ticker} ingested")
         return {"status": "ok", "ticker": ticker}
 
+    # -- narrative / sentiment: backend-selectable (SEC filings + local
+    # lexicon by default, or AlphaSense when configured) -----------------
+    def _resolve_qualitative_backends(self, alphasense_configured: bool) -> tuple[str, str]:
+        """Mirrors `calorch.providers._resolve_backend` for the ingestion side."""
+        narrative_backend = self._s.narrative_backend
+        if narrative_backend == "auto":
+            narrative_backend = "alphasense" if alphasense_configured else "sec"
+        sentiment_backend = self._s.sentiment_backend
+        if sentiment_backend == "auto":
+            sentiment_backend = "alphasense" if alphasense_configured else "lexicon"
+        return narrative_backend, sentiment_backend
+
+    def _sec_narrative_client(self) -> Any:
+        from calorch.sec_narrative import SecNarrativeClient
+
+        return SecNarrativeClient(
+            user_agent=self._s.sec_user_agent, cache_dir=self._s.sec_cache_dir / "narrative"
+        )
+
+    def ingest_qualitative(self, ticker: str, alphasense_client: Any | None = None) -> dict[str, Any]:
+        """Ingest narrative + sentiment for one ticker, backend-selectable.
+
+        When both `narrative_backend` and `sentiment_backend` resolve to
+        "alphasense" this is exactly `ingest_alphasense` (narrative +
+        transcripts + sentiment, unchanged). Otherwise it writes narrative
+        and/or sentiment from the free SEC-derived backend — no transcripts
+        blob is written on that path (transcripts stays AlphaSense-only).
+        """
+        alphasense = alphasense_client if alphasense_client is not None else self._alphasense()
+        alphasense_configured = alphasense is not None
+        narrative_backend, sentiment_backend = self._resolve_qualitative_backends(alphasense_configured)
+
+        if narrative_backend == "alphasense" and sentiment_backend == "alphasense":
+            return self.ingest_alphasense(ticker, client=alphasense)
+
+        sec_client = None
+        if narrative_backend == "sec" or sentiment_backend == "lexicon":
+            try:
+                sec_client = self._sec_narrative_client()
+            except ImportError as e:
+                log.warning("SEC narrative client unavailable for %s (edgartools not installed): %s", ticker, e)
+
+        meta = {"ticker": ticker, "date": self._date}
+
+        try:
+            if narrative_backend == "alphasense":
+                narrative = alphasense.guidance_hits(ticker, limit=10) if alphasense else []
+            else:
+                narrative = sec_client.narrative_docs(ticker, limit=10) if sec_client else []
+        except Exception as e:
+            log.warning("Qualitative narrative ingestion failed for %s: %s", ticker, e)
+            return {"status": "error", "ticker": ticker, "error": str(e)}
+
+        try:
+            if sentiment_backend == "alphasense":
+                sentiment = (
+                    alphasense.sentiment(ticker) if alphasense
+                    else {"ticker": ticker, "mean_sentiment": None, "sample": 0, "source": "none"}
+                )
+            else:
+                from calorch.sentiment_lexicon import aggregate
+
+                texts = [doc["text"] for doc in (sec_client.full_texts(ticker, limit=5) if sec_client else [])]
+                sentiment = {"ticker": ticker, "source": "sec-lexicon", **aggregate(texts)}
+        except Exception as e:
+            log.warning("Qualitative sentiment ingestion failed for %s: %s", ticker, e)
+            return {"status": "error", "ticker": ticker, "error": str(e)}
+
+        self._blob.upload_json(self._blob.input_container, f"inputs/narrative/{ticker}/{self._date}.json", narrative, metadata=meta)
+        self._blob.upload_json(self._blob.input_container, f"inputs/sentiment/{ticker}/{self._date}.json", sentiment, metadata=meta)
+        self._log.append(
+            f"Qualitative {ticker} ingested (narrative={narrative_backend}, sentiment={sentiment_backend})"
+        )
+        return {"status": "ok", "ticker": ticker, "narrative_backend": narrative_backend,
+                "sentiment_backend": sentiment_backend}
 
     # -- Fundamentals: SEC iXBRL (or edgartools, opt-in via SEC_BACKEND) ---
     def _fundamentals_client(self) -> Any:
@@ -191,8 +266,11 @@ class IngestionPipeline:
         """Run the full ingestion pipeline for a list of tickers.
 
         Per ticker:
-          * SEC EDGAR  — fundamentals + segments + filing guidance (needs CIK)
-          * AlphaSense — narrative + transcripts + sentiment (keyed on ticker)
+          * SEC EDGAR    — fundamentals + segments + filing guidance (needs CIK)
+          * qualitative  — narrative + sentiment, backend-selectable (SEC
+            filings + local lexicon by default, or AlphaSense when
+            configured — see `ingest_qualitative`); transcripts stay
+            AlphaSense-only, keyed on ticker.
         """
         results: dict[str, Any] = {"tickers": {}}
 
@@ -221,7 +299,7 @@ class IngestionPipeline:
                     log.warning("SEC ingestion failed for %s: %s", ticker, e)
                     ticker_results["sec_error"] = str(e)
 
-            ticker_results["alphasense"] = self.ingest_alphasense(ticker, client=alphasense)
+            ticker_results["qualitative"] = self.ingest_qualitative(ticker, alphasense_client=alphasense)
             results["tickers"][ticker] = ticker_results
 
         results["log"] = self._log
