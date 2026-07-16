@@ -1,8 +1,17 @@
 # Analyst-grade report templates (SEC + AlphaSense only)
 
-> **Status:** approved plan, not yet implemented (parked 2026-06-12).
-> Revisit by implementing the phases in order; Phase 1 also fixes two
-> latent live-mode bugs and is safe to land on its own.
+> **Status: IMPLEMENTED (2026-06-15)** — landed on
+> `claude/azure-durable-langraph-refactor-nndomb` as three commits:
+> data foundation (04c885a), engine/renderer upgrades (6221b6e),
+> template/builder redesign (5bf1e5c). The two Phase-1 bug fixes landed
+> earlier (a1eecf4, merged via PR #1). Implementation deviates from this
+> plan where the codebase moved after it was written: multi-quarter
+> history comes from the edgartools backend (sec_edgartools.py) rather
+> than a hand-rolled native extractor (so no Q4-derivation logic was
+> needed), guidance excerpts come from the SEC narrative backend
+> (sec_narrative.py), sentiment from the local lexicon, and the
+> transcript_docs sections were dropped (transcripts provider is empty
+> without AlphaSense). Delta coloring (Phase 2, opt-in) was not built.
 
 ## Context
 
