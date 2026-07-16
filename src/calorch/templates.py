@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -85,10 +86,13 @@ class TemplateEngine:
             data_sources=data_sources or [],
         )
 
-        # Metadata table (if present)
+        # Metadata table (if present, and only if it has at least one row
+        # left after dash-row suppression)
         meta = self._tpl.get("metadata_table")
         if meta:
-            a.tables.append(self._build_meta_table(meta, context))
+            meta_table = self._build_meta_table(meta, context)
+            if meta_table is not None:
+                a.tables.append(meta_table)
 
         # Walk sections
         for sec in self._tpl.get("sections", []):
@@ -164,17 +168,21 @@ class TemplateEngine:
 
         if rows_from and rows_from in data_tables:
             table_data = data_tables[rows_from]
-            table_to_add = {
-                "title": subtitle or "",
-                "headers": table_data.get("headers", []),
-                "rows": table_data.get("rows", []),
-            }
+            filtered_rows = [r for r in table_data.get("rows", []) if not _row_is_blank(r)]
+            if filtered_rows:
+                table_to_add = {
+                    "title": subtitle or "",
+                    "headers": table_data.get("headers", []),
+                    "rows": filtered_rows,
+                }
+                if table_data.get("source_note"):
+                    table_to_add["source_note"] = table_data["source_note"]
         elif "rows" in sec:
             rows = []
             for row in sec["rows"]:
                 label = _fmt(row.get("label", ""), ctx)
                 value = _fmt(row.get("value", ""), ctx)
-                if value and value != row.get("value", ""):
+                if value and value != row.get("value", "") and not _is_blank_value(value):
                     rows.append([label, value])
             if rows:
                 table_to_add = {
@@ -182,6 +190,9 @@ class TemplateEngine:
                     "headers": sec.get("headers", ["Metric", "Value"]),
                     "rows": rows,
                 }
+                static_note = sec.get("source_note")
+                if static_note:
+                    table_to_add["source_note"] = _fmt(static_note, ctx)
         elif "blank_rows" in sec:
             cols = len(sec.get("headers", []))
             blanks = [[""] * cols for _ in range(sec["blank_rows"])]
@@ -219,13 +230,15 @@ class TemplateEngine:
         if content:
             a.sections.append((_fmt(sec["title"], ctx), content))
 
-    def _build_meta_table(self, meta: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    def _build_meta_table(self, meta: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any] | None:
         rows = []
         for row in meta.get("rows", []):
             label = _fmt(row.get("label", ""), ctx)
             value = _fmt(row.get("value", ""), ctx)
-            if value and value != row.get("value", ""):
+            if value and value != row.get("value", "") and not _is_blank_value(value):
                 rows.append([label, value])
+        if not rows:
+            return None
         return {
             "title": "",
             "headers": meta.get("headers", ["Metric", "Value"]),
@@ -248,3 +261,34 @@ def _fmt(template: str, ctx: dict[str, Any]) -> str:
 class _SafeDict(dict):
     def __missing__(self, key: str) -> str:
         return "{" + key + "}"
+
+
+# ------------------------------------------------------------------
+# Dash-row suppression
+# ------------------------------------------------------------------
+# Any lowercase-snake placeholder that survived formatting (e.g. "{ticker}")
+# marks a row as unresolved and therefore blank.
+_PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
+# Characters a "value" can be made entirely of and still mean "no data":
+# em-dash, hyphen, whitespace, and punctuation used to decorate empty
+# placeholders (e.g. "— (—/—/—)", "$—", "—x", "—%", "—:").
+_BLANK_STRIP_CHARS = "—-()/,.%:x$ \t\n"
+
+
+def _is_blank_value(v: str) -> bool:
+    """True when ``v`` carries no real information.
+
+    Catches plain dashes ("—", "-"), decorated dash clusters
+    ("— (—/—/—)"), and values still containing an unresolved
+    ``{placeholder}`` after formatting.
+    """
+    s = str(v)
+    if _PLACEHOLDER_RE.search(s):
+        return True
+    return s.strip(_BLANK_STRIP_CHARS) == ""
+
+
+def _row_is_blank(row: list[Any]) -> bool:
+    """A ``rows_from`` row is blank when every non-label cell is blank."""
+    cells = row[1:] if len(row) > 1 else row
+    return all(_is_blank_value(c) for c in cells)

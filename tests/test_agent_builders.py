@@ -30,18 +30,15 @@ _CASES = {
         "AAPL Q2 FY2026 Earnings Call",
         {
             "title": "EARNINGS PREP PACK",
+            # With no providers wired, every market-data table is dash-only
+            # and the engine's dash-row suppression now omits those sections
+            # entirely; only the LLM-fallback snapshot and the (static) ESG
+            # section survive in this degraded configuration.
             "section_headings": [
                 "Executive Snapshot",
-                "Last Quarter Performance (Q1 FY2026)",
-                "Q2 FY2026 Consensus Estimates",
-                "Key Financial Metrics",
-                "Valuation Multiples",
-                "Balance Sheet Highlights",
-                "Analyst Sentiment & Fund Activity",
                 "ESG Snapshot",
-                "Recent Price Performance",
             ],
-            "n_tables": 8,
+            "n_tables": 1,
             "role_focus": "",
         },
     ),
@@ -51,11 +48,9 @@ _CASES = {
             "title": "MANAGEMENT MEETING BRIEFING",
             "section_headings": [
                 "Company Overview",
-                "Last Quarter (Q1 FY2026)",
                 "Recent Developments",
-                "Financial Summary",
             ],
-            "n_tables": 3,
+            "n_tables": 1,
             "role_focus": "CFO",
         },
     ),
@@ -65,10 +60,9 @@ _CASES = {
             "title": "CONFERENCE PREP PACK",
             "section_headings": [
                 "Company Overview",
-                "Last Quarter (Q1 FY2026)",
                 "Recent Developments",
             ],
-            "n_tables": 2,
+            "n_tables": 0,
             "role_focus": "",
         },
     ),

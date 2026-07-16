@@ -90,6 +90,20 @@ def _add_table(doc: Document, headers: list[str], rows: list[list[str]]) -> None
     doc.add_paragraph("")
 
 
+def _add_source_note(doc: Document, table: dict) -> None:
+    """Emit an italic, 8pt, gray provenance footnote under a table, if present."""
+    note = table.get("source_note")
+    if not note:
+        return
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(8)
+    r = p.add_run(str(note))
+    r.italic = True
+    r.font.size = Pt(8)
+    r.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+
+
 def _set_doc_defaults(doc: Document) -> None:
     style = doc.styles["Normal"]
     style.font.name = "Segoe UI"
@@ -169,6 +183,7 @@ def _render_docx_inner(analysis: EventAnalysis, event: CalendarEvent, out_path: 
                     tr.font.size = Pt(11)
                     tr.font.color.rgb = RGBColor(0x1F, 0x3A, 0x5F)
                 _add_table(doc, t.get("headers", []), t.get("rows", []))
+                _add_source_note(doc, t)
                 ti += 1
         else:
             _add_bullets(doc, items)
@@ -176,6 +191,7 @@ def _render_docx_inner(analysis: EventAnalysis, event: CalendarEvent, out_path: 
     while ti < len(analysis.tables):
         t = analysis.tables[ti]
         _add_table(doc, t.get("headers", []), t.get("rows", []))
+        _add_source_note(doc, t)
         ti += 1
 
     # ---- data sources table ----
@@ -227,6 +243,9 @@ _HTML_CSS = """
   table.snap th, table.snap td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: right; }
   table.snap th { background: #f3f4f6; color: #1f3a5f; text-align: left; }
   table.snap td.tk { text-align: left; font-weight: 600; }
+  .srcnote { font-size: 10px; color: #6b7280; margin-top: 2px; }
+  .tblcap { font-weight: 600; color: #1f3a5f; font-size: 12px; margin: 8px 0 2px; }
+  .full-detail { font-size: 12px; color: #6b7280; font-style: italic; }
   .footer { font-size: 11px; color: #6b7280; text-align: center; padding: 12px; }
   a { color: #2e75b6; }
 </style>
@@ -243,32 +262,81 @@ def render_html_email(analysis: EventAnalysis, event: CalendarEvent, doc_link: s
         return _render_html_email_inner(analysis, event, doc_link, link_label=link_label)
 
 
-def _render_html_email_inner(analysis: EventAnalysis, event: CalendarEvent, doc_link: str | None, *, link_label: str = "Open DOCX") -> str:
-    snap = analysis.tables[0] if analysis.tables else None
-    snap_html = ""
-    if snap:
-        rows = "".join(
-            "<tr>"
-            + f'<td class="tk">{html.escape(str(r[0]))}</td>'
-            + "".join(f"<td>{html.escape(str(c))}</td>" for c in r[1:])
-            + "</tr>"
-            for r in snap["rows"]
-        )
-        headers = "".join(f"<th>{html.escape(str(h))}</th>" for h in snap["headers"])
-        snap_html = (
-            '<table class="snap"><thead><tr>'
-            + headers.replace("<th>", '<th colspan="1">', 0)
-            + "</tr></thead><tbody>"
-            + rows
-            + "</tbody></table>"
-        )
+_MAX_HTML_BULLETS_PER_SECTION = 8
+_MAX_HTML_TABLES = 10
 
-    sections_html = ""
-    for heading, items in analysis.sections[:3]:
-        bullets = "".join(f"<li>{html.escape(b)}</li>" for b in items)
-        sections_html += (
-            f'<div class="section"><h2>{html.escape(heading)}</h2><ul>{bullets}</ul></div>'
-        )
+
+def _table_html(t: dict) -> str:
+    """Render one table dict (headers/rows/title/source_note) as HTML.
+
+    Reuses the `.snap` table style so the digest matches the DOCX look —
+    first column bold/left-aligned (ticker/label), rest right-aligned.
+    """
+    title = t.get("title", "")
+    caption_html = f'<p class="tblcap">{html.escape(str(title))}</p>' if title else ""
+    headers_html = "".join(f"<th>{html.escape(str(h))}</th>" for h in t.get("headers", []))
+    rows_html = "".join(
+        "<tr>"
+        + f'<td class="tk">{html.escape(str(r[0]))}</td>'
+        + "".join(f"<td>{html.escape(str(c))}</td>" for c in r[1:])
+        + "</tr>"
+        for r in t.get("rows", [])
+    )
+    table_html = (
+        '<table class="snap"><thead><tr>' + headers_html + "</tr></thead><tbody>" + rows_html + "</tbody></table>"
+    )
+    note = t.get("source_note")
+    note_html = f'<div class="srcnote">{html.escape(str(note))}</div>' if note else ""
+    return caption_html + table_html + note_html
+
+
+def _render_html_email_inner(analysis: EventAnalysis, event: CalendarEvent, doc_link: str | None, *, link_label: str = "Open DOCX") -> str:
+    # Walk every section in document order, interleaving tables exactly like
+    # the DOCX renderer: a section whose sole item is the "__TABLE__"
+    # sentinel consumes the next table off analysis.tables (table index ti
+    # incremented on every such section — this includes the case where the
+    # template has a metadata_table: it is prepended to analysis.tables but
+    # has no paired section, so it is consumed by whichever data section is
+    # walked first, exactly as _render_docx_inner does).
+    ti = 0
+    table_count = 0
+    truncated = False
+    parts: list[str] = []
+
+    for heading, items in analysis.sections:
+        heading_html = f"<h2>{html.escape(heading)}</h2>"
+        if items and items[0] == "__TABLE__":
+            body_html = ""
+            if ti < len(analysis.tables):
+                t = analysis.tables[ti]
+                if table_count < _MAX_HTML_TABLES:
+                    body_html = _table_html(t)
+                    table_count += 1
+                else:
+                    truncated = True
+                ti += 1
+            parts.append(f'<div class="section">{heading_html}{body_html}</div>')
+        else:
+            shown = [b for b in items if b]
+            li_html = "".join(f"<li>{html.escape(str(b))}</li>" for b in shown[:_MAX_HTML_BULLETS_PER_SECTION])
+            if len(shown) > _MAX_HTML_BULLETS_PER_SECTION:
+                li_html += "<li>…</li>"
+                truncated = True
+            parts.append(f'<div class="section">{heading_html}<ul>{li_html}</ul></div>')
+
+    # Any remaining tables (mirrors the DOCX renderer's trailing while-loop
+    # for spare/unpaired tables).
+    while ti < len(analysis.tables):
+        t = analysis.tables[ti]
+        if table_count < _MAX_HTML_TABLES:
+            parts.append(f'<div class="section">{_table_html(t)}</div>')
+            table_count += 1
+        else:
+            truncated = True
+        ti += 1
+
+    sections_html = "".join(parts)
+    full_detail_html = '<p class="full-detail">Full detail in the attached DOCX.</p>' if truncated else ""
 
     # doc_link can be event-derived (ev.web_link): only emit an anchor for
     # http(s)/file schemes — a javascript:/data: URL survives html.escape.
@@ -295,8 +363,8 @@ def _render_html_email_inner(analysis: EventAnalysis, event: CalendarEvent, doc_
         {_confidence_badge(analysis.confidence)}
         {f'<span class="badge" style="background:#6b7280">{html.escape(analysis.role_focus)}</span>' if analysis.role_focus else ''}
       </p>
-      {snap_html}
       {sections_html}
+      {full_detail_html}
       {doc_link_html}
     </div>
     <div class="footer">Generated by calorch · LangGraph orchestrator · {datetime.now(tz=UTC).isoformat(timespec='seconds')}Z</div>
