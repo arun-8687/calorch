@@ -82,6 +82,8 @@ class FakeCompany:
         cashflow: FakeStatement | None = None,
         facts: FakeFacts | None = None,
         history_income: FakeStatement | None = None,
+        history_cashflow: FakeStatement | None = None,
+        history_balance: FakeStatement | None = None,
     ) -> None:
         self.cik = cik
         self.name = name
@@ -90,6 +92,8 @@ class FakeCompany:
         self._cashflow = cashflow
         self._facts = facts
         self._history_income = history_income
+        self._history_cashflow = history_cashflow
+        self._history_balance = history_balance
 
     def income_statement(self, periods: int = 1, annual: bool = False) -> FakeStatement | None:
         if periods == 1:
@@ -97,10 +101,14 @@ class FakeCompany:
         return self._history_income
 
     def balance_sheet(self, periods: int = 1, annual: bool = False) -> FakeStatement | None:
-        return self._balance
+        if periods == 1:
+            return self._balance
+        return self._history_balance
 
     def cash_flow_statement(self, periods: int = 1, annual: bool = False) -> FakeStatement | None:
-        return self._cashflow
+        if periods == 1:
+            return self._cashflow
+        return self._history_cashflow
 
     def get_facts(self) -> FakeFacts:
         if self._facts is None:
@@ -127,11 +135,17 @@ def _full_company() -> FakeCompany:
             "NetIncomeLoss": {period: 15_000.0},
             "EarningsPerShareDiluted": {period: 2.0},
             "ResearchAndDevelopmentExpense": {period: 8_000.0},
+            "CostOfGoodsAndServicesSold": {period: 60_000.0},
         },
         columns=["label", "depth", period],
     ))
     cashflow = FakeStatement(FakeFrame(
-        {"PaymentsToAcquirePropertyPlantAndEquipment": {period: 5_000.0}},
+        {
+            "PaymentsToAcquirePropertyPlantAndEquipment": {period: 5_000.0},
+            "NetCashProvidedByUsedInOperatingActivities": {period: 25_000.0},
+            "PaymentsForRepurchaseOfCommonStock": {period: 3_000.0},
+            "PaymentsOfDividendsCommonStock": {period: 1_000.0},
+        },
         columns=["label", period],
     ))
     balance = FakeStatement(FakeFrame(
@@ -143,6 +157,9 @@ def _full_company() -> FakeCompany:
             "LongTermDebt": {period: 30_000.0},
             "InventoryNet": {period: 10_000.0},
             "AccountsReceivableNetCurrent": {period: 12_000.0},
+            "AccountsPayableCurrent": {period: 9_000.0},
+            "AssetsCurrent": {period: 70_000.0},
+            "LiabilitiesCurrent": {period: 35_000.0},
             # shares_out deliberately absent from the presentation -> exercises
             # the raw-facts fallback path in _fill_instant.
         },
@@ -225,6 +242,25 @@ def test_latest_fundamentals_margins_derivation() -> None:
     assert result["debt_equity"] == round(30_000.0 / 120_000.0, 2)
 
 
+def test_latest_fundamentals_new_keys_and_derived_metrics() -> None:
+    company = _full_company()
+    client = EdgarToolsClient("test agent test@example.com", company_factory=lambda _ident: company)
+
+    result = client.latest_fundamentals("0000320193", "AAPL")
+
+    assert result["cost_of_revenue"] == 60_000.0
+    assert result["ocf"] == 25_000.0
+    assert result["buybacks"] == 3_000.0
+    assert result["dividends_paid"] == 1_000.0
+    assert result["accounts_payable"] == 9_000.0
+    assert result["current_assets"] == 70_000.0
+    assert result["current_liabilities"] == 35_000.0
+
+    assert result["fcf"] == 25_000.0 - 5_000.0  # ocf - capex
+    assert result["fcf_margin"] == round((25_000.0 - 5_000.0) / 100_000.0 * 100, 1)
+    assert result["current_ratio"] == round(70_000.0 / 35_000.0, 2)
+
+
 # ---------------------------------------------------------------------------
 # Degraded shapes
 # ---------------------------------------------------------------------------
@@ -298,6 +334,79 @@ def test_fundamentals_history_ordering_and_labels() -> None:
     assert first["operating_income"] is None  # not populated in this fixture
     assert "operating_margin" not in first
     assert first["net_margin"] == round(10.0 / 100.0 * 100, 1)
+
+
+def test_fundamentals_history_cashflow_and_balance_join() -> None:
+    labels = ["Q2 2026", "Q1 2026", "Q4 2025"]
+    revenue = {"Q2 2026": 100.0, "Q1 2026": 90.0, "Q4 2025": 80.0}
+    income_frame = FakeFrame(
+        {"RevenueFromContractWithCustomerExcludingAssessedTax": revenue},
+        columns=["label", "depth", *labels],
+    )
+    cashflow_frame = FakeFrame(
+        {
+            "NetCashProvidedByUsedInOperatingActivities": {"Q2 2026": 30.0, "Q1 2026": 25.0, "Q4 2025": 20.0},
+            "PaymentsToAcquirePropertyPlantAndEquipment": {"Q2 2026": 10.0, "Q1 2026": 8.0, "Q4 2025": 7.0},
+            "PaymentsForRepurchaseOfCommonStock": {"Q2 2026": 5.0, "Q1 2026": 4.0, "Q4 2025": 3.0},
+            "PaymentsOfDividendsCommonStock": {"Q2 2026": 2.0, "Q1 2026": 2.0, "Q4 2025": 2.0},
+        },
+        columns=["label", *labels],
+    )
+    balance_frame = FakeFrame(
+        {
+            "AssetsCurrent": {"Q2 2026": 60.0, "Q1 2026": 55.0, "Q4 2025": 50.0},
+            "LiabilitiesCurrent": {"Q2 2026": 30.0, "Q1 2026": 25.0, "Q4 2025": 20.0},
+        },
+        columns=["label", *labels],
+    )
+    company = FakeCompany(
+        history_income=FakeStatement(income_frame),
+        history_cashflow=FakeStatement(cashflow_frame),
+        history_balance=FakeStatement(balance_frame),
+    )
+    client = EdgarToolsClient("test agent test@example.com", company_factory=lambda _ident: company)
+
+    result = client.fundamentals_history("0000320193", "AAPL", quarters=3)
+
+    rows = result["quarterly"]
+    assert [row["label"] for row in rows] == labels
+    first, second = rows[0], rows[1]
+
+    assert first["ocf"] == 30.0
+    assert first["capex"] == 10.0
+    assert first["fcf"] == 20.0
+    assert first["fcf_margin"] == round(20.0 / 100.0 * 100, 1)
+    assert first["buybacks"] == 5.0
+    assert first["dividends_paid"] == 2.0
+    assert first["current_assets"] == 60.0
+    assert first["current_liabilities"] == 30.0
+    assert first["current_ratio"] == round(60.0 / 30.0, 2)
+
+    assert second["ocf"] == 25.0
+    assert second["fcf"] == 25.0 - 8.0
+    assert second["current_ratio"] == round(55.0 / 25.0, 2)
+
+
+def test_fundamentals_history_missing_cashflow_balance_degrades_new_fields_to_none() -> None:
+    labels = ["Q2 2026", "Q1 2026"]
+    revenue = {"Q2 2026": 100.0, "Q1 2026": 90.0}
+    income_frame = FakeFrame(
+        {"RevenueFromContractWithCustomerExcludingAssessedTax": revenue},
+        columns=["label", "depth", *labels],
+    )
+    # No history_cashflow / history_balance supplied -> both statements are None.
+    company = FakeCompany(history_income=FakeStatement(income_frame))
+    client = EdgarToolsClient("test agent test@example.com", company_factory=lambda _ident: company)
+
+    result = client.fundamentals_history("0000320193", "AAPL", quarters=2)
+
+    first = result["quarterly"][0]
+    assert first["revenue"] == 100.0  # income side unaffected
+    for key in (
+        "ocf", "capex", "buybacks", "dividends_paid", "fcf", "fcf_margin",
+        "current_assets", "current_liabilities", "current_ratio",
+    ):
+        assert first[key] is None, f"{key} should be None, got {first[key]!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -482,3 +591,82 @@ def test_ingestion_pipeline_falls_back_to_native_on_import_error(
 
     client = pipeline._fundamentals_client()
     assert isinstance(client, SecIxbrlClient)
+
+
+# ---------------------------------------------------------------------------
+# ingest_fundamentals — quarterly-history blob (edgartools-backend-only)
+# ---------------------------------------------------------------------------
+def test_ingest_fundamentals_writes_history_blob_when_client_supports_it(tmp_path: Path) -> None:
+    from calorch.blob_store import LocalBlobStore
+
+    class StubEdgarToolsClientWithHistory:
+        def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+            return {"source": "sec-edgartools", "ticker": ticker, "cik": cik}
+
+        def fundamentals_history(self, cik: str, ticker: str, *, quarters: int = 5) -> dict[str, Any]:
+            return {"source": "sec-edgartools", "ticker": ticker, "cik": cik,
+                    "quarterly": [{"label": "Q2 2026", "revenue": 100.0}], "quarters": quarters}
+
+    blob = LocalBlobStore(tmp_path / "blobs")
+    pipeline = IngestionPipeline(blob_store=blob, date="20260716")
+    pipeline._s = dataclasses.replace(pipeline._s, sec_cache_dir=tmp_path, sec_backend="edgartools")
+    pipeline._fundamentals_client = StubEdgarToolsClientWithHistory  # type: ignore[method-assign]
+
+    result = pipeline.ingest_fundamentals("0000320193", "AAPL")
+
+    assert result["status"] == "ok"
+    assert result["history_path"] == "inputs/fundamentals_history/0000320193/AAPL/20260716.json"
+    history = blob.download_json(blob.input_container, result["history_path"])
+    assert history["quarterly"] == [{"label": "Q2 2026", "revenue": 100.0}]
+
+    # the ordinary fundamentals blob is written too, unaffected
+    fundamentals = blob.download_json(blob.input_container, result["path"])
+    assert fundamentals["source"] == "sec-edgartools"
+
+
+def test_ingest_fundamentals_native_client_writes_no_history_blob(tmp_path: Path) -> None:
+    from calorch.blob_store import LocalBlobStore
+
+    class StubNativeClientNoHistory:
+        def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+            return {"source": "sec-ixbrl", "ticker": ticker, "cik": cik}
+
+    blob = LocalBlobStore(tmp_path / "blobs")
+    pipeline = IngestionPipeline(blob_store=blob, date="20260716")
+    pipeline._s = dataclasses.replace(pipeline._s, sec_cache_dir=tmp_path, sec_backend="native")
+    pipeline._fundamentals_client = StubNativeClientNoHistory  # type: ignore[method-assign]
+
+    result = pipeline.ingest_fundamentals("0000320193", "AAPL")
+
+    assert result["status"] == "ok"
+    assert "history_path" not in result
+    assert not blob.exists(blob.input_container, "inputs/fundamentals_history/0000320193/AAPL/20260716.json")
+
+
+def test_ingest_fundamentals_history_fetch_failure_still_returns_ok(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A `fundamentals_history` failure must not fail the whole ingest —
+    the base fundamentals blob is already written and the run should degrade,
+    not error.
+    """
+    from calorch.blob_store import LocalBlobStore
+
+    class StubClientHistoryBoom:
+        def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+            return {"source": "sec-edgartools", "ticker": ticker, "cik": cik}
+
+        def fundamentals_history(self, cik: str, ticker: str, *, quarters: int = 5) -> dict[str, Any]:
+            raise RuntimeError("boom")
+
+    blob = LocalBlobStore(tmp_path / "blobs")
+    pipeline = IngestionPipeline(blob_store=blob, date="20260716")
+    pipeline._s = dataclasses.replace(pipeline._s, sec_cache_dir=tmp_path, sec_backend="edgartools")
+    pipeline._fundamentals_client = StubClientHistoryBoom  # type: ignore[method-assign]
+
+    result = pipeline.ingest_fundamentals("0000320193", "AAPL")
+
+    assert result["status"] == "ok"
+    assert "history_path" not in result
+    fundamentals = blob.download_json(blob.input_container, result["path"])
+    assert fundamentals["source"] == "sec-edgartools"

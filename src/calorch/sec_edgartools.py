@@ -56,9 +56,13 @@ _INCOME_FLOW_MAP: dict[str, tuple[str, ...]] = {
     "net_income": ("NetIncomeLoss",),
     "eps_diluted": ("EarningsPerShareDiluted",),
     "rd_expense": ("ResearchAndDevelopmentExpense",),
+    "cost_of_revenue": ("CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"),
 }
 _CASHFLOW_FLOW_MAP: dict[str, tuple[str, ...]] = {
     "capex": ("PaymentsToAcquirePropertyPlantAndEquipment",),
+    "ocf": ("NetCashProvidedByUsedInOperatingActivities",),
+    "buybacks": ("PaymentsForRepurchaseOfCommonStock",),
+    "dividends_paid": ("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"),
 }
 _INSTANT_MAP: dict[str, tuple[str, ...]] = {
     "total_assets": ("Assets",),
@@ -72,12 +76,23 @@ _INSTANT_MAP: dict[str, tuple[str, ...]] = {
     "shares_out": ("CommonStockSharesOutstanding", "EntityCommonStockSharesOutstanding"),
     "inventory": ("InventoryNet",),
     "receivables": ("AccountsReceivableNetCurrent",),
+    "accounts_payable": ("AccountsPayableCurrent",),
+    "current_assets": ("AssetsCurrent",),
+    "current_liabilities": ("LiabilitiesCurrent",),
 }
 _ALL_KEYS: tuple[str, ...] = tuple(_INCOME_FLOW_MAP) + tuple(_CASHFLOW_FLOW_MAP) + tuple(_INSTANT_MAP)
 
-# Quarterly history only needs the income-statement flow metrics.
+# Quarterly history — income-statement flow metrics...
 _HISTORY_MAP: dict[str, tuple[str, ...]] = {
     k: _INCOME_FLOW_MAP[k] for k in ("revenue", "gross_profit", "operating_income", "net_income", "eps_diluted")
+}
+# ...joined with cash-flow-statement and balance-sheet metrics by identical
+# period label (see `fundamentals_history`).
+_HISTORY_CASHFLOW_MAP: dict[str, tuple[str, ...]] = {
+    k: _CASHFLOW_FLOW_MAP[k] for k in ("capex", "ocf", "buybacks", "dividends_paid")
+}
+_HISTORY_BALANCE_MAP: dict[str, tuple[str, ...]] = {
+    k: _INSTANT_MAP[k] for k in ("current_assets", "current_liabilities")
 }
 
 # Non-period columns every edgartools statement DataFrame carries.
@@ -185,6 +200,13 @@ class EdgarToolsClient:
             return {**base, "quarterly": []}
         period_labels = [c for c in cols if c not in _METADATA_COLS]  # newest first
 
+        # Cash-flow / balance-sheet statements are fetched defensively, same
+        # as `_safe_statement` — a failure here degrades those columns to
+        # None per-row rather than failing the whole history call, since
+        # `_value_at` already treats a None dataframe as "concept absent".
+        cashflow_df = self._safe_statement(company, "cash_flow_statement", periods=quarters)
+        balance_df = self._safe_statement(company, "balance_sheet", periods=quarters)
+
         quarterly: list[dict[str, Any]] = []
         for label in period_labels:
             row: dict[str, Any] = {"label": label}
@@ -203,6 +225,38 @@ class EdgarToolsClient:
                     row["operating_margin"] = round(row["operating_income"] / rev * 100, 1)
                 if row.get("net_income") is not None:
                     row["net_margin"] = round(row["net_income"] / rev * 100, 1)
+
+            # Joined by identical period label — cash-flow-statement metrics.
+            for key, concepts in _HISTORY_CASHFLOW_MAP.items():
+                row[key] = None
+                for concept in concepts:
+                    val = _value_at(cashflow_df, concept, label)
+                    if val is not None:
+                        row[key] = val
+                        break
+
+            row["fcf"] = None
+            row["fcf_margin"] = None
+            if row.get("ocf") is not None and row.get("capex") is not None:
+                row["fcf"] = row["ocf"] - row["capex"]
+                if rev:
+                    row["fcf_margin"] = round(row["fcf"] / rev * 100, 1)
+
+            # Joined by identical period label — balance-sheet metrics.
+            for key, concepts in _HISTORY_BALANCE_MAP.items():
+                row[key] = None
+                for concept in concepts:
+                    val = _value_at(balance_df, concept, label)
+                    if val is not None:
+                        row[key] = val
+                        break
+
+            row["current_ratio"] = None
+            ca = row.get("current_assets")
+            cl = row.get("current_liabilities")
+            if ca is not None and cl:
+                row["current_ratio"] = round(ca / cl, 2)
+
             quarterly.append(row)
 
         return {**base, "quarterly": quarterly}
@@ -357,3 +411,15 @@ def _apply_derived(result: dict[str, Any]) -> None:
         result["net_debt"] = debt_v - cash_v
     if debt_v and eq and eq != 0:
         result["debt_equity"] = round(debt_v / eq, 2)
+
+    ocf = result.get("ocf")
+    capex = result.get("capex")
+    if ocf is not None and capex is not None:
+        result["fcf"] = ocf - capex
+        if rev and rev > 0:
+            result["fcf_margin"] = round(result["fcf"] / rev * 100, 1)
+
+    current_assets = result.get("current_assets")
+    current_liabilities = result.get("current_liabilities")
+    if current_assets is not None and current_liabilities:
+        result["current_ratio"] = round(current_assets / current_liabilities, 2)

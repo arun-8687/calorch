@@ -6,6 +6,8 @@ shape so the orchestrator never makes live API calls during a run.
 
 Path conventions (under the input container):
   inputs/fundamentals/{cik}/{ticker}/{date}.json     — SEC iXBRL fundamentals
+  inputs/fundamentals_history/{cik}/{ticker}/{date}.json — quarterly history
+                                                        (edgartools backend only)
   inputs/segments/{cik}/{ticker}/{date}_{axis}.json  — SEC iXBRL segments
   inputs/filings/{cik}/{ticker}/{date}.json          — SEC EFTS guidance excerpts
   inputs/narrative/{ticker}/{date}.json              — AlphaSense guidance excerpts
@@ -52,6 +54,32 @@ class BlobFundamentalsProvider:
         if data is None:
             return {"source": "blob", "ticker": ticker, "note": f"No fundamentals blob for {ticker} on {self._date}"}
         return data
+
+    def fundamentals_history(self, cik: str, ticker: str, *, quarters: int = 5) -> dict[str, Any]:
+        prefix = f"inputs/fundamentals_history/{cik}/{ticker}/"
+        path = f"{prefix}{self._date}.json"
+        data = self._blob.download_json(self._blob.input_container, path)
+        if data is not None:
+            return data
+
+        # Same-day miss -> fall back to the latest available date for this
+        # cik/ticker (blob names are `{prefix}{YYYYMMDD}.json`, so lexical
+        # sort order matches chronological order).
+        try:
+            names = self._blob.list_blobs(self._blob.input_container, prefix)
+        except Exception as e:  # noqa: BLE001 - defensive: degrade, never raise
+            log.warning("fundamentals_history list_blobs failed for %s: %s", ticker, e)
+            names = []
+        if names:
+            latest = sorted(names)[-1]
+            data = self._blob.download_json(self._blob.input_container, latest)
+            if data is not None:
+                return data
+
+        return {
+            "source": "blob", "ticker": ticker, "cik": cik, "quarterly": [],
+            "note": f"No fundamentals_history blob for {ticker} (checked {self._date} and prior dates)",
+        }
 
 
 class BlobFilingsProvider:

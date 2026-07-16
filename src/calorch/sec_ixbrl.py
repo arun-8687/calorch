@@ -478,6 +478,13 @@ class SecIxbrlClient:
             "shares_out":       ("CommonStockSharesOutstanding", "shares"),
             "inventory":        ("InventoryNet", "USD"),
             "receivables":      ("AccountsReceivableNetCurrent", "USD"),
+            "cost_of_revenue":  ("CostOfGoodsAndServicesSold", "USD"),
+            "ocf":              ("NetCashProvidedByUsedInOperatingActivities", "USD"),
+            "buybacks":         ("PaymentsForRepurchaseOfCommonStock", "USD"),
+            "dividends_paid":   ("PaymentsOfDividendsCommonStock", "USD"),
+            "accounts_payable": ("AccountsPayableCurrent", "USD"),
+            "current_assets":   ("AssetsCurrent", "USD"),
+            "current_liabilities": ("LiabilitiesCurrent", "USD"),
         }
 
         for key, (concept, unit) in _MAP.items():
@@ -527,6 +534,18 @@ class SecIxbrlClient:
             result["net_debt"] = debt_v - cash_v
         if debt_v and eq and eq != 0:
             result["debt_equity"] = round(debt_v / eq, 2)
+
+        ocf = result.get("ocf")
+        capex = result.get("capex")
+        if ocf is not None and capex is not None:
+            result["fcf"] = ocf - capex
+            if rev and rev > 0:
+                result["fcf_margin"] = round(result["fcf"] / rev * 100, 1)
+
+        current_assets = result.get("current_assets")
+        current_liabilities = result.get("current_liabilities")
+        if current_assets is not None and current_liabilities:
+            result["current_ratio"] = round(current_assets / current_liabilities, 2)
 
         # Company name from DEI taxonomy
         dei = cf.get("facts", {}).get("dei", {})

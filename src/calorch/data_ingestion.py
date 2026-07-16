@@ -284,8 +284,25 @@ class IngestionPipeline:
         path = _blob_path("fundamentals", ticker=ticker, cik=cik, date=self._date)
         self._blob.upload_json(self._blob.input_container, path, fundamentals, metadata={"ticker": ticker, "cik": cik, "date": self._date})
 
+        result: dict[str, Any] = {"status": "ok", "cik": cik, "ticker": ticker, "path": path}
+
+        # Quarterly history — edgartools-backend-only capability; the native
+        # iXBRL client has no `fundamentals_history` method.
+        if hasattr(client, "fundamentals_history"):
+            try:
+                history = client.fundamentals_history(cik, ticker)
+            except Exception as e:
+                log.warning("SEC fundamentals_history ingestion failed for %s: %s", ticker, e)
+            else:
+                history_path = _blob_path("fundamentals_history", ticker=ticker, cik=cik, date=self._date)
+                self._blob.upload_json(
+                    self._blob.input_container, history_path, history,
+                    metadata={"ticker": ticker, "cik": cik, "date": self._date},
+                )
+                result["history_path"] = history_path
+
         self._log.append(f"SEC fundamentals {ticker} ingested")
-        return {"status": "ok", "cik": cik, "ticker": ticker, "path": path}
+        return result
 
     # -- Segments: SEC iXBRL ----------------------------------------------
     def ingest_segments(self, cik: str, ticker: str) -> dict[str, Any]:

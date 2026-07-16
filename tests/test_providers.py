@@ -117,6 +117,55 @@ def test_sec_providers_return_empty_when_client_absent() -> None:
     assert funds.get("note") is not None
 
 
+# ---------------------------------------------------------------------------
+# fundamentals_history — Protocol degradation
+# ---------------------------------------------------------------------------
+def test_fundamentals_history_empty_when_client_absent() -> None:
+    result = IxbrlFundamentalsProvider(ixbrl=None).fundamentals_history("0000320193", "AAPL")
+    assert result == {"source": "sec-ixbrl", "ticker": "AAPL", "quarterly": []}
+
+
+def test_fundamentals_history_empty_when_wrapped_client_lacks_method() -> None:
+    """The native SecIxbrlClient has no `fundamentals_history` — the provider
+    must degrade to an empty quarterly series rather than raising.
+    """
+    class NativeLikeClient:
+        def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+            return {"source": "sec-ixbrl", "ticker": ticker, "cik": cik}
+
+    result = IxbrlFundamentalsProvider(ixbrl=NativeLikeClient()).fundamentals_history("0000320193", "AAPL")
+    assert result == {"source": "sec-ixbrl", "ticker": "AAPL", "quarterly": []}
+
+
+def test_fundamentals_history_delegates_when_client_has_method() -> None:
+    class EdgarLikeClient:
+        def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+            return {}
+
+        def fundamentals_history(self, cik: str, ticker: str, *, quarters: int = 5) -> dict[str, Any]:
+            return {"source": "sec-edgartools", "ticker": ticker, "cik": cik, "quarterly": [{"label": "Q2 2026"}],
+                    "quarters_requested": quarters}
+
+    result = IxbrlFundamentalsProvider(ixbrl=EdgarLikeClient()).fundamentals_history("0000320193", "AAPL", quarters=3)
+    assert result["source"] == "sec-edgartools"
+    assert result["quarterly"] == [{"label": "Q2 2026"}]
+    assert result["quarters_requested"] == 3
+
+
+def test_fundamentals_history_degrades_on_exception() -> None:
+    class BoomClient:
+        def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]:
+            return {}
+
+        def fundamentals_history(self, cik: str, ticker: str, *, quarters: int = 5) -> dict[str, Any]:
+            raise ValueError("boom")
+
+    result = IxbrlFundamentalsProvider(ixbrl=BoomClient()).fundamentals_history("0000320193", "AAPL")
+    assert result["source"] == "sec-ixbrl"
+    assert result["quarterly"] == []
+    assert "note" in result
+
+
 def test_alphasense_sentiment_provider_none_client() -> None:
     s = AlphaSenseSentimentProvider(client=None).sentiment("AAPL")
     assert s["mean_sentiment"] is None and s["source"] == "none"
@@ -225,3 +274,72 @@ def test_narrative_backend_sec_import_error_degrades(
     sent = bundle.sentiment.sentiment("AAPL")
     assert sent["mean_sentiment"] is None
     assert any(s["source_name"] == "SEC narrative" and s["status"] == "error" for s in bundle.sources)
+
+
+# ---------------------------------------------------------------------------
+# BlobFundamentalsProvider.fundamentals_history — round-trip + latest-date
+# fallback, via LocalBlobStore (no Azure, no network).
+# ---------------------------------------------------------------------------
+def test_blob_fundamentals_history_round_trip(tmp_path: Path) -> None:
+    from calorch.blob_reader import BlobFundamentalsProvider
+    from calorch.blob_store import LocalBlobStore
+
+    blob = LocalBlobStore(tmp_path / "blobs")
+    history = {"source": "sec-edgartools", "ticker": "AAPL", "cik": "0000320193",
+               "quarterly": [{"label": "Q2 2026", "revenue": 111.2e9}]}
+    blob.upload_json(blob.input_container, "inputs/fundamentals_history/0000320193/AAPL/20260716.json", history)
+
+    provider = BlobFundamentalsProvider(blob, date="20260716")
+    result = provider.fundamentals_history("0000320193", "AAPL")
+
+    assert result == history
+
+
+def test_blob_fundamentals_history_falls_back_to_latest_available_date(tmp_path: Path) -> None:
+    """Same-day blob is missing -> fall back to the most recent prior date
+    for this cik/ticker, discovered via `list_blobs`.
+    """
+    from calorch.blob_reader import BlobFundamentalsProvider
+    from calorch.blob_store import LocalBlobStore
+
+    blob = LocalBlobStore(tmp_path / "blobs")
+    older = {"quarterly": [{"label": "Q1 2026", "revenue": 143.8e9}]}
+    newer = {"quarterly": [{"label": "Q2 2026", "revenue": 111.2e9}]}
+    blob.upload_json(blob.input_container, "inputs/fundamentals_history/0000320193/AAPL/20260601.json", older)
+    blob.upload_json(blob.input_container, "inputs/fundamentals_history/0000320193/AAPL/20260701.json", newer)
+
+    # Requested date (today) has no blob -> should fall back to 20260701 (latest of the two).
+    provider = BlobFundamentalsProvider(blob, date="20260716")
+    result = provider.fundamentals_history("0000320193", "AAPL")
+
+    assert result == newer
+
+
+def test_blob_fundamentals_history_missing_entirely_returns_empty_quarterly(tmp_path: Path) -> None:
+    from calorch.blob_reader import BlobFundamentalsProvider
+    from calorch.blob_store import LocalBlobStore
+
+    blob = LocalBlobStore(tmp_path / "blobs")
+    provider = BlobFundamentalsProvider(blob, date="20260716")
+
+    result = provider.fundamentals_history("0000320193", "AAPL")
+
+    assert result["quarterly"] == []
+    assert "note" in result
+
+
+def test_blob_fundamentals_history_ignores_other_tickers(tmp_path: Path) -> None:
+    """The prefix scan must not leak another ticker's history into the fallback."""
+    from calorch.blob_reader import BlobFundamentalsProvider
+    from calorch.blob_store import LocalBlobStore
+
+    blob = LocalBlobStore(tmp_path / "blobs")
+    blob.upload_json(
+        blob.input_container, "inputs/fundamentals_history/0000789019/MSFT/20260601.json",
+        {"quarterly": [{"label": "MSFT quarter"}]},
+    )
+
+    provider = BlobFundamentalsProvider(blob, date="20260716")
+    result = provider.fundamentals_history("0000320193", "AAPL")
+
+    assert result["quarterly"] == []

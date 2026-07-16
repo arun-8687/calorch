@@ -43,6 +43,7 @@ log = logging.getLogger("calorch.providers")
 @runtime_checkable
 class FundamentalsProvider(Protocol):
     def latest_fundamentals(self, cik: str, ticker: str) -> dict[str, Any]: ...
+    def fundamentals_history(self, cik: str, ticker: str, *, quarters: int = 5) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -126,6 +127,22 @@ class IxbrlFundamentalsProvider:
         except (ValueError, KeyError, TypeError) as e:
             log.warning("iXBRL fundamentals parse failure for %s: %s", ticker, e)
             return {"source": "sec-ixbrl", "ticker": ticker, "note": str(e)}
+
+    def fundamentals_history(self, cik: str, ticker: str, *, quarters: int = 5) -> dict[str, Any]:
+        """Delegates to the wrapped client's `fundamentals_history` when it has
+        one (the opt-in edgartools backend); the native iXBRL client has no
+        equivalent, so it degrades to an empty quarterly series.
+        """
+        if self._ixbrl is None or not hasattr(self._ixbrl, "fundamentals_history"):
+            return {"source": "sec-ixbrl", "ticker": ticker, "quarterly": []}
+        try:
+            return self._ixbrl.fundamentals_history(cik, ticker, quarters=quarters)
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("iXBRL fundamentals_history network failure for %s: %s", ticker, e)
+            return {"source": "sec-ixbrl", "ticker": ticker, "quarterly": [], "note": f"network error: {e}"}
+        except (ValueError, KeyError, TypeError) as e:
+            log.warning("iXBRL fundamentals_history parse failure for %s: %s", ticker, e)
+            return {"source": "sec-ixbrl", "ticker": ticker, "quarterly": [], "note": str(e)}
 
 
 class EftsFilingsProvider:
