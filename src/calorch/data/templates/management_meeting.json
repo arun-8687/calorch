@@ -10,13 +10,7 @@
   "metadata_table": {
     "table_type": "two_col",
     "rows": [
-      {"label": "Last Price", "value": "{price}"},
-      {"label": "Market Cap", "value": "{market_cap}"},
-      {"label": "CEO", "value": "{ceo_name}"},
-      {"label": "Employees", "value": "{employees}"},
-      {"label": "Sector", "value": "{sector}"},
-      {"label": "Consensus", "value": "{consensus_rating} ({buy_buy}/{hold_hold}/{sell_sell})"},
-      {"label": "Price Target", "value": "{mean_target} ({upside_pct}% upside)"}
+      {"label": "Latest Filing", "value": "{latest_filing}"}
     ]
   },
   "sections": [
@@ -25,8 +19,8 @@
       "title": "Company Overview",
       "source": "llm",
       "llm_method": "enrich_headline",
-      "fallback": ["{company_name} — {sector}. Management 1:1 with {role}."],
-      "prompt_addendum": "Write a 4-5 sentence company overview for a management meeting prep pack. Cover: business description, recent stock performance, key investment thesis points, and why this meeting matters. Be factual."
+      "fallback": ["{company_name} — Management 1:1 with {role}."],
+      "prompt_addendum": "Write a 4-5 sentence company overview for a management meeting prep pack. Cover: business description, recent financial trajectory, key investment thesis points, and why this meeting matters. Be factual."
     },
     {
       "id": "last_quarter",
@@ -35,18 +29,30 @@
       "table_type": "two_col",
       "rows": [
         {"label": "Revenue", "value": "{rev_actual}"},
-        {"label": "EPS (Diluted)", "value": "{eps_actual}"},
-        {"label": "Key Metric 1", "value": "{key_metric_1}"},
-        {"label": "Key Metric 2", "value": "{key_metric_2}"}
+        {"label": "EPS (Diluted)", "value": "{eps_actual}"}
       ]
+    },
+    {
+      "id": "quarterly_trend",
+      "title": "5-Quarter Trend",
+      "source": "data",
+      "table_type": "multi_col",
+      "rows_from": "quarterly_trend"
     },
     {
       "id": "recent_developments",
       "title": "Recent Developments",
       "source": "llm",
       "llm_method": "enrich_guidance",
-      "fallback": ["Recent stock performance and key developments."],
-      "prompt_addendum": "Write a concise paragraph (4-6 sentences) summarising recent developments for this company. Cover: stock performance, major news, strategic shifts, and any recent earnings highlights. Be factual with numbers."
+      "fallback": ["Recent financial trajectory and key developments."],
+      "prompt_addendum": "Write a concise paragraph (4-6 sentences) summarising recent developments for this company. Cover: revenue/margin trajectory, major news, strategic shifts, and any recent earnings highlights. Be factual with numbers."
+    },
+    {
+      "id": "guidance_commentary",
+      "title": "Guidance & Management Commentary",
+      "source": "data",
+      "table_type": "multi_col",
+      "rows_from": "narrative_docs"
     },
     {
       "id": "key_discussion_topics",
@@ -55,6 +61,13 @@
       "llm_method": "enrich_key_questions",
       "fallback": [],
       "prompt_addendum": "Write 6-8 themed discussion topics for a management 1:1. Each should be a short paragraph (2-3 sentences) covering a strategic topic. Format as 'Topic: Content/question...' Topics should cover: strategy, financials, competition, capital allocation, product roadmap, and risks."
+    },
+    {
+      "id": "sentiment",
+      "title": "Sentiment",
+      "source": "data",
+      "table_type": "two_col",
+      "rows_from": "sentiment"
     },
     {
       "id": "follow_up_template",
@@ -71,9 +84,9 @@
       "table_type": "two_col",
       "rows": [
         {"label": "Revenue Growth YoY", "value": "{rev_growth}"},
-        {"label": "Operating Margin", "value": "{operating_margin}"},
-        {"label": "Key Segment Growth", "value": "{segment_growth}"},
-        {"label": "P/E Ratio", "value": "{pe_ttm}"}
+        {"label": "Operating Margin Δ (vs PY)", "value": "{op_margin_delta}"},
+        {"label": "FCF Margin", "value": "{fcf_margin}"},
+        {"label": "R&D % of Revenue", "value": "{rd_pct_revenue}"}
       ]
     }
   ]

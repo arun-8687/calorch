@@ -75,6 +75,19 @@ class _StubFundamentals:
             "current_ratio": 1.05,
         }
 
+    def fundamentals_history(self, cik, ticker, *, quarters=5):
+        return {"quarterly": []}
+
+
+class _StubFilings:
+    def guidance_hits(self, cik, ticker, limit=5):
+        return []
+
+
+class _StubTranscripts:
+    def transcript_hits(self, ticker, limit=5):
+        return []
+
 
 class _StubSegments:
     def latest_segments(self, cik, ticker, axis="product"):
@@ -105,6 +118,8 @@ class _StubProviders:
         self.segments = _StubSegments()
         self.sentiment = _StubSentiment()
         self.narrative = _StubNarrative()
+        self.filings = _StubFilings()
+        self.transcripts = _StubTranscripts()
         self.sources = []
 
 

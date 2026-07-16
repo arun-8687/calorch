@@ -25,7 +25,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.shared import Pt, RGBColor
 
-from calorch.analysis import EventAnalysis  # re-exported for back-compat
+from calorch.analysis import EventAnalysis, event_datetime_ctx  # re-exported for back-compat
 from calorch.state import CalendarEvent
 from calorch.telemetry import start_span
 
@@ -156,7 +156,8 @@ def _render_docx_inner(analysis: EventAnalysis, event: CalendarEvent, out_path: 
     sr.font.size = Pt(14)
     sr.font.color.rgb = RGBColor(0x2E, 0x75, 0xB6)
 
-    date_str = event.start.strftime("%B %d, %Y | %I:%M %p IST") if hasattr(event.start, "strftime") else str(event.start)
+    _edt = event_datetime_ctx(event)
+    date_str = f"{_edt['event_date']} | {_edt['event_time']}" if _edt["event_date"] else str(event.start)
     date_p = doc.add_paragraph()
     date_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     date_p.add_run(date_str).italic = True

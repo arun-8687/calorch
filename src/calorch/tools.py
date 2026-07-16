@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ from calorch.config import Settings
 if TYPE_CHECKING:
     from calorch.providers import ProviderBundle
 from calorch.state import CalendarEvent, OrchestratorError
+
+log = logging.getLogger("calorch.tools")
 
 
 # ---------------------------------------------------------------------------
@@ -766,10 +769,17 @@ def make_providers(settings: Settings) -> ProviderBundle:
     Sources:
       * SEC EDGAR  — fundamentals + segments (iXBRL), filing search (EFTS)
       * AlphaSense — narrative/guidance, transcripts/expert calls, sentiment
+      * ``ops``    — the delivery repository (this process's own history),
+        for the internal_review agent's pipeline-activity stats.
 
     The bundle is cheap to construct (no network); the underlying clients
     cache per-run. See ``calorch.providers.build_providers``.
     """
     from calorch.providers import build_providers as _build
 
-    return _build(settings)
+    bundle = _build(settings)
+    try:
+        bundle.ops = make_repository(settings)
+    except (OrchestratorError, OSError) as e:
+        log.warning("ops repository unavailable for internal_review: %s", e)
+    return bundle

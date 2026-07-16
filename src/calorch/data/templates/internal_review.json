@@ -13,41 +13,29 @@
       "source": "llm",
       "llm_method": "enrich_headline",
       "fallback": ["Internal review — coverage universe and research process."],
-      "prompt_addendum": "Write 3-4 bullet points summarising the internal review. Focus on coverage performance, process improvements, and resource allocation. Be concise."
+      "prompt_addendum": "Write 3-4 bullet points summarising the internal review. Focus on pipeline activity, process improvements, and resource allocation. Be concise."
     },
     {
-      "id": "coverage_universe",
-      "title": "Coverage Universe",
+      "id": "pipeline_activity",
+      "title": "Pipeline Activity (Last 90 Days)",
       "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "Total Names", "value": "{total_names}"},
-        {"label": "Active Buys", "value": "{active_buys}"},
-        {"label": "Active Holds", "value": "{active_holds}"},
-        {"label": "Active Sells", "value": "{active_sells}"},
-        {"label": "Coverage Ratio", "value": "{coverage_ratio}"}
-      ]
+      "table_type": "multi_col",
+      "rows_from": "pipeline_activity"
     },
     {
-      "id": "research_activity",
-      "title": "Research Activity",
+      "id": "watchlist_coverage",
+      "title": "Watchlist Coverage",
       "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "Initiations", "value": "{initiations}"},
-        {"label": "Updates", "value": "{updates}"},
-        {"label": "Deep Dives", "value": "{deep_dives}"},
-        {"label": "Channel Checks", "value": "{channel_checks}"},
-        {"label": "KOL Calls", "value": "{kol_calls}"}
-      ]
+      "table_type": "multi_col",
+      "rows_from": "watchlist_coverage"
     },
     {
       "id": "performance_review",
       "title": "Performance Review",
       "source": "llm",
       "llm_method": "enrich_guidance",
-      "fallback": ["Review of coverage performance vs benchmarks."],
-      "prompt_addendum": "Write a concise paragraph (4-5 sentences) reviewing research team performance. Cover: hit rate, notable calls, and areas for improvement."
+      "fallback": ["Review of pipeline throughput and delivery reliability."],
+      "prompt_addendum": "Write a concise paragraph (4-5 sentences) reviewing research pipeline performance. Cover: throughput, delivery reliability, and areas for improvement."
     },
     {
       "id": "key_questions",

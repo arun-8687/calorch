@@ -22,9 +22,16 @@
       "title": "Meeting Context",
       "source": "static",
       "content": [
-        "Expert consultation on {topic_area}.",
+        "Expert consultation: {topic_area}.",
         "Prep pack provides a structured framework for the discussion."
       ]
+    },
+    {
+      "id": "company_context",
+      "title": "Company Context ({primary_ticker})",
+      "source": "data",
+      "table_type": "two_col",
+      "rows_from": "company_context"
     },
     {
       "id": "pre_call_research",
@@ -32,7 +39,7 @@
       "source": "llm",
       "llm_method": "enrich_headline",
       "fallback": ["Pre-call research on {expert_name} and {topic_area}. Check LinkedIn, institutional websites, and recent publications before the call."],
-      "prompt_addendum": "Write 3-4 sentences of pre-call research notes for a KOL meeting. Suggest what to look up about the expert and the topic area."
+      "prompt_addendum": "Write 3-4 sentences of pre-call research notes for an expert-call meeting. Suggest what to look up about the expert and the topic area."
     },
     {
       "id": "discussion_guide",
@@ -40,35 +47,35 @@
       "source": "static",
       "subsections": [
         {
-          "title": "Clinical Landscape",
+          "title": "Industry Landscape",
           "questions": [
-            "What is your assessment of the current disease landscape?",
-            "What are the major unmet medical needs?",
-            "How is the standard of care evolving?"
+            "What is your assessment of the current industry landscape?",
+            "What are the major unmet needs or gaps you see?",
+            "How is the competitive set evolving?"
           ]
         },
         {
           "title": "Competitive Dynamics",
           "questions": [
-            "What emerging therapies concern you most?",
-            "What competitive advantages matter most?",
-            "What is your view on the clinical trial landscape?"
+            "What emerging entrants or products concern you most?",
+            "What competitive advantages matter most in this space?",
+            "How do you rate the leaders vs. challengers today?"
           ]
         },
         {
           "title": "Commercial Outlook",
           "questions": [
-            "What are the key market access barriers?",
+            "What are the key barriers to adoption or market access?",
             "How are pricing dynamics evolving?",
             "What drives adoption curves in your view?"
           ]
         },
         {
-          "title": "Regulatory Environment",
+          "title": "Regulatory & Policy Environment",
           "questions": [
-            "What regulatory pathways are realistic?",
-            "What are approval timelines likely to be?",
-            "What policy changes would impact your field?"
+            "What regulatory pathways or requirements are most relevant?",
+            "What approval or compliance timelines are realistic?",
+            "What policy changes would most impact this space?"
           ]
         }
       ]
@@ -79,14 +86,14 @@
       "source": "llm",
       "llm_method": "enrich_key_questions",
       "fallback": [],
-      "prompt_addendum": "Write 4-5 investment hypotheses to test with this KOL. Each should be a short statement that the expert can validate or refute. Format as numbered statements."
+      "prompt_addendum": "Write 4-5 investment hypotheses to test with this expert. Each should be a short statement that the expert can validate or refute. Format as numbered statements."
     },
     {
       "id": "hypothesis_table",
       "title": "Hypothesis Tracker",
       "source": "static",
       "table_type": "multi_col",
-      "headers": ["Hypothesis", "Supporting Evidence", "KOL's View", "Investment Implication"],
+      "headers": ["Hypothesis", "Supporting Evidence", "Expert's View", "Investment Implication"],
       "blank_rows": 4
     },
     {

@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from calorch import fin_metrics as fm
 from calorch.state import CalendarEvent, ClassificationResult, EventType
 from calorch.telemetry import start_span
 
@@ -67,6 +69,32 @@ def fmt_x(val):
     if val is None:
         return "—"
     return f"{val:.1f}x"
+
+
+# ---------------------------------------------------------------------------
+# Event date/time — real values from the calendar event, never hardcoded.
+# ---------------------------------------------------------------------------
+def event_datetime_ctx(ev: Any) -> dict[str, str]:
+    """Real ``event_date``/``event_time`` derived from ``ev.start``.
+
+    Handles both a ``datetime`` (the normal ``CalendarEvent.start`` shape)
+    and a raw ISO string. Degrades to empty strings — never raises, never
+    fabricates a placeholder time.
+    """
+    start = getattr(ev, "start", None)
+    dt: datetime | None = None
+    if isinstance(start, datetime):
+        dt = start
+    elif isinstance(start, str):
+        try:
+            dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        except ValueError:
+            dt = None
+    if dt is None:
+        return {"event_date": "", "event_time": ""}
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC)
+    return {"event_date": dt.strftime("%Y-%m-%d"), "event_time": dt.strftime("%H:%M UTC")}
 
 
 # ---------------------------------------------------------------------------
@@ -192,16 +220,116 @@ def enrich_sentiment(providers: Any, ticker: str | None) -> dict[str, Any] | Non
 # Table helpers
 # ---------------------------------------------------------------------------
 def add_sentiment_table_to(data_tables: dict[str, Any], sentiment: dict[str, Any] | None) -> None:
-    """Insert an AlphaSense sentiment table if a score is available."""
+    """Insert a sentiment table if a score is available (AlphaSense or the
+    free SEC-lexicon backend — labelled via ``sentiment['source']``).
+    """
     if sentiment and sentiment.get("mean_sentiment") is not None:
-        data_tables["sentiment"] = {
-            "headers": ["AlphaSense sentiment", "Value"],
+        table: dict[str, Any] = {
+            "headers": ["Sentiment", "Value"],
             "rows": [
                 ["Mean sentiment (-1..1)", f"{sentiment['mean_sentiment']:+.2f}"],
                 ["Label", str(sentiment.get("label", "—")).title()],
                 ["Documents sampled", str(sentiment.get("sample", "—"))],
             ],
         }
+        if sentiment.get("source") == "sec-lexicon":
+            table["source_note"] = "Local finance-lexicon score over SEC filing text"
+        data_tables["sentiment"] = table
+
+
+def truncate_text(text: str, limit: int = 200) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def guidance_filings_table(filings_hits: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """SEC EFTS full-text guidance hits -> Date | Form | Excerpt table."""
+    if not filings_hits:
+        return None
+    rows = [
+        [h.get("file_date") or "—", h.get("form") or "—", truncate_text(h.get("snippet"), 200) or "—"]
+        for h in filings_hits[:8]
+    ]
+    if not rows:
+        return None
+    return {
+        "headers": ["Date", "Form", "Excerpt"],
+        "rows": rows,
+        "source_note": "Source: SEC EDGAR full-text search (EFTS)",
+    }
+
+
+def narrative_docs_table(narrative_hits: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """SEC narrative / AlphaSense guidance excerpts -> Date | Type | Excerpt table."""
+    if not narrative_hits:
+        return None
+    rows = [
+        [h.get("date") or "—", h.get("type") or "—", truncate_text(h.get("snippet"), 200) or "—"]
+        for h in narrative_hits[:8]
+    ]
+    if not rows:
+        return None
+    return {
+        "headers": ["Date", "Type", "Excerpt"],
+        "rows": rows,
+        "source_note": "Source: SEC 8-K press release / MD&A",
+    }
+
+
+def guidance_excerpts_str(narrative_hits: list[dict[str, Any]] | None, n: int = 3) -> str:
+    """Top-``n`` narrative snippets joined for LLM context (``guidance_excerpts``)."""
+    if not narrative_hits:
+        return "—"
+    parts = [truncate_text(h.get("snippet"), 200) for h in narrative_hits[:n] if h.get("snippet")]
+    return " | ".join(parts) if parts else "—"
+
+
+_GENERIC_EMAIL_DOMAINS = {"gmail", "outlook", "hotmail", "yahoo", "icloud", "me", "aol"}
+
+
+def counterpart_from_event(ev: Any) -> tuple[str, str]:
+    """Counterpart name/affiliation from the event organizer / first external attendee.
+
+    Name prefers ``ev.organizer`` (a display name in the calendar payload);
+    affiliation is guessed from the first attendee email's domain, skipping
+    generic consumer webmail domains. Degrades to ("—", "—") — never
+    fabricates a name or firm.
+    """
+    name = getattr(ev, "organizer", "") or ""
+    firm = ""
+    for addr in getattr(ev, "attendees", []) or []:
+        if "@" not in addr:
+            continue
+        local, _, domain = addr.partition("@")
+        domain_root = domain.split(".")[0].lower()
+        if domain_root in _GENERIC_EMAIL_DOMAINS:
+            continue
+        if not name:
+            name = local.replace(".", " ").title()
+        firm = domain_root.replace("-", " ").title()
+        break
+    return name or "—", firm or "—"
+
+
+def latest_filing_str(funds: dict[str, Any] | None) -> str:
+    """"{form} — period ended {period}" from a ``latest_fundamentals()`` dict, or "—"."""
+    if not funds:
+        return "—"
+    form = funds.get("revenue_form")
+    period = funds.get("revenue_period")
+    if form and period:
+        return f"{form} — period ended {period}"
+    return "—"
+
+
+def recent_doc_titles_str(narrative_hits: list[dict[str, Any]] | None, n: int = 5) -> str:
+    """Recent document titles joined for LLM context (``recent_doc_titles``)."""
+    if not narrative_hits:
+        return "—"
+    titles = [h.get("title") for h in narrative_hits[:n] if h.get("title")]
+    return " | ".join(titles) if titles else "—"
 
 
 def segment_table_rows(seg: list[dict[str, Any]] | None) -> list[list[str]]:
@@ -227,6 +355,95 @@ def data_sources(providers: Any) -> list[dict[str, Any]]:
     return providers.sources if providers else []
 
 
+def _cash_flow_rows(history: dict[str, Any]) -> list[list[str]]:
+    """OCF / CapEx / FCF / FCF margin / Buybacks / Dividends — latest Q + TTM."""
+    quarterly = history.get("quarterly") or []
+    if not quarterly:
+        return []
+    latest = quarterly[0]
+
+    def _ttm_b(key: str) -> str:
+        v = fm.ttm(history, key)
+        return fmt_b(v) if v is not None else "—"
+
+    rows = [
+        ["Operating cash flow", fmt_b(latest.get("ocf")), _ttm_b("ocf")],
+        ["CapEx", fmt_b(latest.get("capex")), _ttm_b("capex")],
+        ["Free cash flow", fmt_b(latest.get("fcf")), _ttm_b("fcf")],
+        ["FCF margin", fmt_pct(latest.get("fcf_margin")), _fcf_margin_ttm(history)],
+        ["Buybacks", fmt_b(latest.get("buybacks")), _ttm_b("buybacks")],
+        ["Dividends paid", fmt_b(latest.get("dividends_paid")), _ttm_b("dividends_paid")],
+    ]
+    return rows
+
+
+def _fcf_margin_ttm(history: dict[str, Any]) -> str:
+    fcf_ttm = fm.ttm(history, "fcf")
+    rev_ttm = fm.ttm(history, "revenue")
+    if fcf_ttm is None or not rev_ttm:
+        return "—"
+    return fmt_pct(fcf_ttm / rev_ttm * 100)
+
+
+def ticker_trends(ticker: str, providers: Any, cik: str | None) -> dict[str, Any]:
+    """Multi-quarter SEC trend data for one ticker: tables + LLM context.
+
+    Degrades cleanly to an empty shape when ``providers``/``cik`` are
+    missing or the backend has no history (native iXBRL backend, blob
+    miss): ``tables`` is empty and every ``ctx``/``strings`` value is a
+    safe default, so downstream template rows simply suppress.
+    """
+    history: dict[str, Any] = {}
+    if providers and cik and ticker:
+        try:
+            history = providers.fundamentals.fundamentals_history(cik, ticker, quarters=5) or {}
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            log.warning("fundamentals_history fetch failed for %s: %s", ticker, e)
+        except (KeyError, TypeError, ValueError) as e:
+            log.warning("fundamentals_history parse failed for %s: %s", ticker, e)
+
+    quarterly = history.get("quarterly") or []
+    tables: dict[str, Any] = {}
+
+    trend_rows = fm.trend_rows(history)
+    if quarterly and trend_rows:
+        tables["quarterly_trend"] = {
+            "headers": fm.trend_headers(history),
+            "rows": trend_rows,
+            "source_note": "Source: SEC quarterly filings (XBRL)",
+        }
+
+    if quarterly and quarterly[0].get("ocf") is not None:
+        cf_rows = _cash_flow_rows(history)
+        if cf_rows:
+            tables["cash_flow"] = {
+                "headers": ["Metric", quarterly[0].get("label", "Latest Q"), "TTM"],
+                "rows": cf_rows,
+                "source_note": "Source: SEC quarterly filings (XBRL)",
+            }
+
+    ctx: dict[str, Any] = {}
+    if quarterly:
+        ctx["last_quarter_label"] = quarterly[0].get("label") or "latest quarter"
+        if len(quarterly) > 1:
+            ctx["prev_quarter_label"] = quarterly[1].get("label") or "—"
+        if len(quarterly) > 4:
+            ctx["prior_year_quarter_label"] = quarterly[4].get("label") or "—"
+        rev_yoy = fm.yoy(history, "revenue")
+        if rev_yoy is not None:
+            ctx["rev_yoy"] = f"{rev_yoy:+.1f}%"
+        eps_yoy = fm.yoy(history, "eps_diluted")
+        if eps_yoy is not None:
+            ctx["eps_yoy"] = f"{eps_yoy:+.1f}%"
+
+    return {
+        "history": history,
+        "tables": tables,
+        "ctx": ctx,
+        "strings": fm.trend_summary_strings(history),
+    }
+
+
 def ticker_context(
     ticker: str,
     providers: Any,
@@ -234,14 +451,16 @@ def ticker_context(
     event_id: str = "",
     event_subject: str = "",
     event_date: str = "",
+    event_time: str = "",
     cik: str = "",
 ) -> dict[str, Any]:
     """Build a template context dict for one ticker from SEC fundamentals.
 
-    Financial figures come from SEC iXBRL company facts. Market-data fields
-    (price, valuation multiples, analyst consensus) have no SEC/AlphaSense
-    source and render as "—"; the qualitative side is supplied separately by
-    the AlphaSense narrative/transcript/sentiment helpers.
+    Every figure here comes from SEC iXBRL company facts (or the current
+    quarter's fundamentals history). There is no price/consensus/valuation
+    source, so those fields are simply absent — a template row referencing
+    a key that isn't here resolves to an unfilled ``{placeholder}`` and the
+    engine's dash-row suppression drops it, rather than us fabricating "—".
     """
     funds: dict[str, Any] = {}
     if providers and cik:
@@ -253,6 +472,8 @@ def ticker_context(
             log.warning("SEC iXBRL fetch failed for %s: %s", ticker, e)
 
     f = funds
+    trends = ticker_trends(ticker, providers, cik) if (providers and cik) else {"ctx": {}, "strings": {}}
+    tctx = trends.get("ctx", {})
 
     def _get(*keys: str, fmt_fn=None):
         for k in keys:
@@ -265,27 +486,13 @@ def ticker_context(
         "event_id": event_id,
         "primary_ticker": ticker,
         "company_name": f.get("company_name") or f.get("company") or ticker,
-        # ---- market data: no SEC/AlphaSense source ----
-        "price": "—",
-        "market_cap": "—",
-        "sector": "—",
-        "ceo_name": "—",
-        "employees": "—",
-        "consensus_rating": "—",
-        "mean_target": "—",
-        "upside_pct": "—",
-        "pe_ttm": "—",
-        "forward_pe": "—",
-        "ev_ebitda": "—",
-        "price_sales": "—",
-        "price_book": "—",
-        "buy": "—", "hold": "—", "sell": "—",
-        "buy_pct": "—", "hold_pct": "—", "sell_pct": "—",
-        "num_analysts": "—",
-        "change_1w": "—", "change_1m": "—", "change_ytd": "—",
-        "range_52w": "—",
+        # ---- fiscal labels: real, from fundamentals_history; safe fallback ----
+        "last_quarter_label": tctx.get("last_quarter_label", "latest quarter"),
+        "prev_quarter_label": tctx.get("prev_quarter_label", "—"),
+        "prior_year_quarter_label": tctx.get("prior_year_quarter_label", "—"),
+        "rev_yoy": tctx.get("rev_yoy", "—"),
+        "eps_yoy": tctx.get("eps_yoy", "—"),
         # ---- SEC iXBRL fundamentals ----
-        "last_quarter_label": "Q1 FY2026",
         "rev_actual": _get("revenue", fmt_fn=fmt_b),
         "eps_actual": _get("eps_diluted", fmt_fn=fmt_price),
         "net_income": _get("net_income", fmt_fn=fmt_b),
@@ -300,11 +507,18 @@ def ticker_context(
         "net_debt": _get("net_debt", fmt_fn=fmt_b),
         "debt_equity": _get("debt_equity", fmt_fn=fmt_x),
         "current_ratio": _get("current_ratio", fmt_fn=lambda v: f"{v:.2f}"),
+        "ocf": _get("ocf", fmt_fn=fmt_b),
+        "fcf": _get("fcf", fmt_fn=fmt_b),
+        "fcf_margin": _get("fcf_margin", fmt_fn=fmt_pct),
         "event_date": event_date,
-        "event_time": "09:00 AM IST",
+        "event_time": event_time,
         "conference_name": event_subject,
         "confidence": 0.0,
         "tickers": [ticker],
+        # ---- LLM context: multi-quarter trend strings ----
+        "revenue_trend": trends.get("strings", {}).get("revenue_trend", "—"),
+        "margin_trend": trends.get("strings", {}).get("margin_trend", "—"),
+        "fcf_trend": trends.get("strings", {}).get("fcf_trend", "—"),
     }
 
 

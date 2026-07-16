@@ -27,56 +27,40 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "EPS Actual", "value": "{eps_actual}"},
-        {"label": "EPS Estimate", "value": "{eps_estimate}"},
-        {"label": "EPS Surprise", "value": "{eps_surprise}"},
-        {"label": "Revenue Actual", "value": "{rev_actual}"},
-        {"label": "Revenue Estimate", "value": "{rev_estimate}"},
-        {"label": "Revenue Surprise", "value": "{rev_surprise}"}
+        {"label": "Revenue", "value": "{rev_actual_display}"},
+        {"label": "EPS (Diluted)", "value": "{eps_actual_display}"},
+        {"label": "Gross Margin", "value": "{gross_margin_display}"},
+        {"label": "Operating Margin", "value": "{operating_margin_display}"},
+        {"label": "Net Margin", "value": "{net_margin_display}"}
       ]
     },
     {
-      "id": "consensus",
-      "title": "{next_quarter_label} Consensus Estimates",
+      "id": "quarterly_trend",
+      "title": "5-Quarter Trend",
       "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "EPS Estimate (Avg)", "value": "{eps_q}"},
-        {"label": "EPS Range", "value": "{eps_range}"},
-        {"label": "Revenue Estimate (Avg)", "value": "{rev_q}"},
-        {"label": "Revenue Range", "value": "{rev_range}"},
-        {"label": "# Analysts (EPS)", "value": "{num_analysts}"}
-      ]
+      "table_type": "multi_col",
+      "rows_from": "quarterly_trend"
     },
     {
-      "id": "financial_metrics",
-      "title": "Key Financial Metrics",
+      "id": "cash_flow_capital",
+      "title": "Cash Flow & Capital Returns",
+      "source": "data",
+      "table_type": "multi_col",
+      "rows_from": "cash_flow"
+    },
+    {
+      "id": "return_ratios",
+      "title": "Return Ratios",
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "Gross Margin", "value": "{gross_margin}"},
-        {"label": "Operating Margin", "value": "{operating_margin}"},
-        {"label": "Net Margin", "value": "{net_margin}"},
         {"label": "ROE", "value": "{roe}"},
         {"label": "ROA", "value": "{roa}"}
       ]
     },
     {
-      "id": "valuation",
-      "title": "Valuation Multiples",
-      "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "P/E (TTM)", "value": "{pe_ttm}"},
-        {"label": "Forward P/E", "value": "{forward_pe}"},
-        {"label": "EV/EBITDA", "value": "{ev_ebitda}"},
-        {"label": "Price/Sales", "value": "{price_sales}"},
-        {"label": "Price/Book", "value": "{price_book}"}
-      ]
-    },
-    {
       "id": "balance_sheet",
-      "title": "Balance Sheet Highlights",
+      "title": "Balance Sheet & Liquidity",
       "source": "data",
       "table_type": "two_col",
       "rows": [
@@ -84,7 +68,8 @@
         {"label": "Total Debt", "value": "{total_debt}"},
         {"label": "Net Debt", "value": "{net_debt}"},
         {"label": "Debt/Equity", "value": "{debt_equity}"},
-        {"label": "Current Ratio", "value": "{current_ratio}"}
+        {"label": "Current Ratio", "value": "{current_ratio}"},
+        {"label": "Working Capital", "value": "{working_capital}"}
       ]
     },
     {
@@ -103,19 +88,6 @@
       "rows_from": "geo"
     },
     {
-      "id": "analyst_sentiment",
-      "title": "Analyst Sentiment & Fund Activity",
-      "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "Consensus Rating", "value": "{consensus_rating}"},
-        {"label": "Buy Ratings", "value": "{buy} ({buy_pct}%)"},
-        {"label": "Hold Ratings", "value": "{hold} ({hold_pct}%)"},
-        {"label": "Sell Ratings", "value": "{sell} ({sell_pct}%)"},
-        {"label": "Price Target (Mean)", "value": "{mean_target}"}
-      ]
-    },
-    {
       "id": "key_themes",
       "title": "Key Questions & Themes to Monitor",
       "source": "llm",
@@ -124,29 +96,25 @@
       "prompt_addendum": "Write 6-8 themed bullet points of key questions and themes to monitor for this earnings call. Each should be a short paragraph (2-3 sentences) covering a specific theme like: demand, margins, guidance, competition, regulatory, new products, capital returns, geopolitical. Format as 'Theme: Question/content...'"
     },
     {
-      "id": "esg",
-      "title": "ESG Snapshot",
+      "id": "guidance_commentary",
+      "title": "Guidance & Management Commentary",
       "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "ESG Risk Score", "value": "{esg_score}"},
-        {"label": "Environmental", "value": "{esg_env}"},
-        {"label": "Social", "value": "{esg_social}"},
-        {"label": "Governance", "value": "{esg_gov}"}
-      ]
+      "table_type": "multi_col",
+      "rows_from": "narrative_docs"
     },
     {
-      "id": "price_performance",
-      "title": "Recent Price Performance",
+      "id": "filings_search",
+      "title": "Recent Filings Mentioning Guidance / Outlook",
+      "source": "data",
+      "table_type": "multi_col",
+      "rows_from": "guidance_filings"
+    },
+    {
+      "id": "sentiment",
+      "title": "Sentiment",
       "source": "data",
       "table_type": "two_col",
-      "rows": [
-        {"label": "Current Price", "value": "{price}"},
-        {"label": "1-Week Change", "value": "{perf_1w}"},
-        {"label": "1-Month Change", "value": "{perf_1m}"},
-        {"label": "YTD Change", "value": "{perf_ytd}"},
-        {"label": "52-Week Range", "value": "{range_52w}"}
-      ]
+      "rows_from": "sentiment"
     }
   ]
 }

@@ -1,13 +1,21 @@
 """Analyst-meeting agent — sell-side / buy-side meeting preparation."""
 from __future__ import annotations
 
+from typing import Any
+
 from calorch.agents.base import AgentSpec, register
 from calorch.analysis import (
     EventAnalysis,
+    add_sentiment_table_to,
     base_analysis,
     build_with_template,
+    counterpart_from_event,
+    enrich_sentiment,
+    event_datetime_ctx,
+    latest_filing_str,
     resolve_primary_ticker_and_cik,
     ticker_context,
+    ticker_trends,
 )
 from calorch.state import EventType
 
@@ -15,26 +23,50 @@ from calorch.state import EventType
 def build_analyst_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
     a_base = base_analysis(f"Analyst Meeting — {ev.subject}", ev, cls, ed)
     primary_ticker, cik = resolve_primary_ticker_and_cik(a_base, cik_lookup)
+    edt = event_datetime_ctx(ev)
+
+    sentiment = enrich_sentiment(providers, primary_ticker)
+    funds: dict[str, Any] = {}
+    if providers and cik and primary_ticker:
+        funds = providers.fundamentals.latest_fundamentals(cik, primary_ticker) or {}
+    trends = (
+        ticker_trends(primary_ticker, providers, cik)
+        if (providers and cik and primary_ticker)
+        else {"tables": {}}
+    )
 
     ctx = ticker_context(
         ticker=primary_ticker or "",
         providers=providers,
         event_id=ev.id,
         event_subject=ev.subject,
-        event_date=str(ev.start)[:10] if hasattr(ev, "start") else "",
+        event_date=edt["event_date"],
+        event_time=edt["event_time"],
         cik=cik or "",
     )
+    name, firm = counterpart_from_event(ev)
     ctx.update({
-        "event_time": "7:00 PM IST",
         "confidence": cls.confidence,
         "tickers": a_base.tickers,
-        "analyst_name": "Senior Analyst",
-        "analyst_firm": "Morgan Stanley",
-        "coverage_years": "10",
-        "analyst_rating": "Overweight",
-        "analyst_target": ctx.get("mean_target", "—"),
+        "counterpart_name": name,
+        "counterpart_firm": firm,
+        "latest_filing": latest_filing_str(funds),
     })
-    return build_with_template("analyst_meeting", ctx, {}, llm_call, providers)
+
+    data_tables: dict[str, Any] = {}
+    add_sentiment_table_to(data_tables, sentiment)
+    data_tables.update(trends["tables"])
+    fs_rows = [
+        [label, ctx[key]] for label, key in (
+            ("Revenue", "rev_actual"), ("EPS (Diluted)", "eps_actual"),
+            ("Gross Margin", "gross_margin"), ("Operating Margin", "operating_margin"),
+            ("Net Margin", "net_margin"), ("ROE", "roe"), ("ROA", "roa"),
+            ("Cash", "cash"), ("Net Debt", "net_debt"), ("FCF Margin", "fcf_margin"),
+        )
+    ]
+    data_tables["fundamentals_snapshot"] = {"headers": ["Metric", "Value"], "rows": fs_rows}
+
+    return build_with_template("analyst_meeting", ctx, data_tables, llm_call, providers)
 
 
 register(

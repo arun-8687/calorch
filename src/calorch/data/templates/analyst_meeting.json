@@ -10,13 +10,9 @@
   "metadata_table": {
     "table_type": "two_col",
     "rows": [
-      {"label": "Last Price", "value": "{price}"},
-      {"label": "Market Cap", "value": "{market_cap}"},
-      {"label": "Analyst", "value": "{analyst_name}"},
-      {"label": "Firm", "value": "{analyst_firm}"},
-      {"label": "Coverage Yrs", "value": "{coverage_years}"},
-      {"label": "Consensus", "value": "{consensus_rating}"},
-      {"label": "Price Target", "value": "{mean_target}"}
+      {"label": "Counterpart", "value": "{counterpart_name}"},
+      {"label": "Firm", "value": "{counterpart_firm}"},
+      {"label": "Latest Filing", "value": "{latest_filing}"}
     ]
   },
   "sections": [
@@ -26,27 +22,29 @@
       "source": "llm",
       "llm_method": "enrich_headline",
       "fallback": ["Analyst meeting — sell-side perspective on {primary_ticker}."],
-      "prompt_addendum": "Write 3-4 bullet points summarising the analyst meeting context. Focus on the sell-side view, rating trajectory, and key debate points. Be concise."
+      "prompt_addendum": "Write 3-4 bullet points summarising the analyst meeting context. Focus on the recent financial trajectory and key debate points. Be concise."
     },
     {
-      "id": "analyst_profile",
-      "title": "Analyst Profile",
-      "source": "static",
-      "content": [
-        "Senior analyst, {coverage_years}y coverage, top-3 in sector.",
-        "Firm: {analyst_firm} | Rating: {analyst_rating} | Target: {analyst_target}"
-      ]
+      "id": "fundamentals_snapshot",
+      "title": "Fundamentals Snapshot ({last_quarter_label})",
+      "source": "data",
+      "table_type": "two_col",
+      "rows_from": "fundamentals_snapshot"
+    },
+    {
+      "id": "quarterly_trend",
+      "title": "5-Quarter Trend",
+      "source": "data",
+      "table_type": "multi_col",
+      "rows_from": "quarterly_trend"
     },
     {
       "id": "debate_points",
       "title": "Debate Points",
-      "source": "static",
-      "content": [
-        "Is consensus too high for FY26?",
-        "What's the read-through to peers?",
-        "Buyback pace vs. M&A appetite?",
-        "Margin sustainability at current capex levels?"
-      ]
+      "source": "llm",
+      "llm_method": "enrich_headline",
+      "fallback": [],
+      "prompt_addendum": "Write 4-5 bullet points on the current sell-side debate for this stock, grounded in the revenue/margin/FCF trend data provided. Cover: is consensus too high/low, read-through to peers, capital allocation pace, and margin sustainability. Be specific and cite the trend numbers."
     },
     {
       "id": "key_questions",
@@ -65,12 +63,11 @@
       "prompt_addendum": "Write 3 bullet points on risks from the analyst's perspective. Be specific."
     },
     {
-      "id": "quoted_view",
-      "title": "Quoted View",
-      "source": "llm",
-      "llm_method": "enrich_guidance",
-      "fallback": ["Constructive on AI capex; cautious on consumer hardware cycle."],
-      "prompt_addendum": "Write a 2-3 sentence summary of the analyst's key view on this stock and sector. Be factual."
+      "id": "sentiment",
+      "title": "Sentiment",
+      "source": "data",
+      "table_type": "two_col",
+      "rows_from": "sentiment"
     },
     {
       "id": "note_template",

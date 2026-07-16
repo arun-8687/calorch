@@ -14,10 +14,12 @@ from calorch.config import Settings, get_settings
 from calorch.state import OrchestratorError
 from calorch.tools import (
     GraphOneDriveClient,
+    JsonRepository,
     LocalOneDriveClient,
     _GraphClientReal,
     make_graph_client,
     make_onedrive_client,
+    make_providers,
 )
 
 
@@ -118,6 +120,17 @@ def test_graph_calendar_view_follows_pagination(settings: Settings):
     )
     assert [event["id"] for event in events] == ["a", "b"]
     assert client._http.calls[1] == ("GET", "https://next", None)
+
+
+def test_make_providers_wires_ops_repository(settings: Settings):
+    """internal_review reads ``providers.ops`` for real pipeline stats —
+    make_providers must wire it to the same repository backend as the
+    orchestrator's delivery-idempotency records.
+    """
+    bundle = make_providers(settings)
+    assert bundle.ops is not None
+    assert isinstance(bundle.ops, JsonRepository)
+    assert bundle.ops.all() == []
 
 
 def test_table_repository_crud(monkeypatch: pytest.MonkeyPatch):

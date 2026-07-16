@@ -8,51 +8,32 @@
   },
   "sections": [
     {
-      "id": "market_context",
-      "title": "Market Context",
-      "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "S&P 500", "value": "{sp500}"},
-        {"label": "NASDAQ", "value": "{nasdaq}"},
-        {"label": "VIX", "value": "{vix}"},
-        {"label": "10Y Treasury", "value": "{treasury_10y}"},
-        {"label": "2Y Treasury", "value": "{treasury_2y}"},
-        {"label": "Fed Funds", "value": "{fed_funds}"},
-        {"label": "USD/EUR", "value": "{usd_eur}"},
-        {"label": "Oil (WTI)", "value": "{oil_wti}"}
-      ]
-    },
-    {
-      "id": "sector_performance",
-      "title": "Sector Performance",
+      "id": "watchlist_snapshot",
+      "title": "Watchlist Snapshot",
       "source": "data",
       "table_type": "multi_col",
-      "headers": ["Sector (ETF)", "1M Return", "YTD Return"],
-      "rows_from": "sector_performance"
+      "rows_from": "watchlist_snapshot"
     },
     {
-      "id": "holdings_snapshot",
-      "title": "Portfolio Holdings Snapshot",
+      "id": "sentiment_overview",
+      "title": "Sentiment Overview",
       "source": "data",
       "table_type": "multi_col",
-      "headers": ["Position", "Last Price", "1W Return", "1M Return", "YTD", "Consensus"],
-      "rows_from": "holdings"
+      "rows_from": "sentiment_overview"
     },
     {
-      "id": "key_movers",
-      "title": "Key Movers This Week",
+      "id": "fundamental_highlights",
+      "title": "Fundamental Highlights",
       "source": "llm",
       "llm_method": "enrich_headline",
-      "fallback": ["Key portfolio movers this week."],
-      "prompt_addendum": "Write 3-4 bullet points on the biggest portfolio movers this week. For each: ticker, % change, and the driver (earnings, macro, sector rotation, etc.). Be concise."
+      "fallback": [],
+      "prompt_addendum": "Write 3-5 bullet points on the biggest fundamental movers across the watchlist this period, grounded strictly in the revenue-trend data provided. For each: ticker, growth trajectory, and the likely driver. Be concise."
     },
     {
       "id": "upcoming_catalysts",
       "title": "Upcoming Catalysts",
       "source": "data",
       "table_type": "multi_col",
-      "headers": ["Date", "Company", "Event"],
       "rows_from": "catalysts"
     },
     {

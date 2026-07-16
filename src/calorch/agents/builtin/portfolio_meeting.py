@@ -1,78 +1,133 @@
-"""Portfolio-meeting agent — investment-committee / holdings review preparation."""
+"""Portfolio-meeting agent — investment-committee / holdings review preparation.
+
+Real data only: a per-ticker snapshot over the configured SEC watchlist
+(``settings.sec_watchlist``), each ticker's sentiment score, and recent
+EFTS filing hits as "catalysts". There is no price/market-data source, so
+the old market_context/sector_performance/holdings tables (all fabricated)
+are gone — an unavailable or empty watchlist degrades to an honest
+omission of the affected sections, never a fake table.
+"""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+import httpx
+
 from calorch.agents.base import AgentSpec, register
-from calorch.analysis import EventAnalysis, base_analysis, build_with_template
+from calorch.analysis import (
+    EventAnalysis,
+    base_analysis,
+    build_with_template,
+    event_datetime_ctx,
+    fmt_b,
+    fmt_pct,
+    truncate_text,
+)
+from calorch import fin_metrics as fm
 from calorch.state import EventType
+
+log = logging.getLogger("calorch.agents.portfolio_meeting")
+
+_DASH = "—"
+_MAX_WATCHLIST = 8
+_DEGRADE = (httpx.HTTPError, ConnectionError, TimeoutError, KeyError, TypeError, ValueError)
 
 
 def build_portfolio_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) -> EventAnalysis:
+    from calorch.config import get_settings
+
     a_base = base_analysis(f"Portfolio Filing Brief — {ev.subject}", ev, cls, ed)
+    edt = event_datetime_ctx(ev)
+
+    watchlist: list[str] = []
+    try:
+        watchlist = list(get_settings().sec_watchlist or [])[:_MAX_WATCHLIST]
+    except (OSError, ValueError) as e:
+        log.warning("could not load sec_watchlist: %s", e)
+
+    watchlist_rows: list[list[str]] = []
+    sentiment_rows: list[list[str]] = []
+    catalyst_rows: list[list[str]] = []
+    trend_strings: list[str] = []
+
+    if providers and cik_lookup and watchlist:
+        for ticker in watchlist:
+            try:
+                cik = cik_lookup(ticker)
+            except (KeyError, ValueError, httpx.HTTPError) as e:
+                log.debug("cik lookup miss for %s: %s", ticker, e)
+                continue
+            if not cik:
+                continue
+
+            try:
+                funds = providers.fundamentals.latest_fundamentals(cik, ticker) or {}
+                history = providers.fundamentals.fundamentals_history(cik, ticker, quarters=5) or {}
+                rev_yoy = fm.yoy(history, "revenue")
+                row = [
+                    ticker,
+                    fmt_b(funds.get("revenue")),
+                    f"{rev_yoy:+.1f}%" if rev_yoy is not None else _DASH,
+                    fmt_pct(funds.get("operating_margin")),
+                    fmt_pct(funds.get("fcf_margin")),
+                ]
+                if any(c != _DASH for c in row[1:]):
+                    watchlist_rows.append(row)
+                strings = fm.trend_summary_strings(history)
+                if strings.get("revenue_trend") != _DASH:
+                    trend_strings.append(f"{ticker}: {strings['revenue_trend']}")
+            except _DEGRADE as e:
+                log.warning("watchlist fundamentals failed for %s: %s", ticker, e)
+
+            try:
+                snap = providers.sentiment.sentiment(ticker)
+                if snap and snap.get("mean_sentiment") is not None:
+                    sentiment_rows.append(
+                        [ticker, f"{snap['mean_sentiment']:+.2f}", str(snap.get("label", "—")).title()]
+                    )
+            except _DEGRADE as e:
+                log.warning("watchlist sentiment failed for %s: %s", ticker, e)
+
+            try:
+                hits = providers.filings.guidance_hits(cik, ticker, limit=3) or []
+                for h in hits[:2]:
+                    catalyst_rows.append(
+                        [h.get("file_date") or _DASH, ticker,
+                         f"{h.get('form') or '—'}: {truncate_text(h.get('snippet'), 120)}"]
+                    )
+            except _DEGRADE as e:
+                log.warning("watchlist filings failed for %s: %s", ticker, e)
+
+    catalyst_rows.sort(key=lambda r: r[0], reverse=True)
+    catalyst_rows = catalyst_rows[:10]
 
     data_tables: dict[str, Any] = {}
-    data_tables["market_context"] = {
-        "headers": ["Metric", "Value"],
-        "rows": [
-            ["S&P 500", "6,368.85 (-1.67% 1D, -7.82% 1M, -6.96% YTD)"],
-            ["NASDAQ", "20,948.36 (-2.15% 1D, -9.87% YTD)"],
-            ["VIX", "31.05 (+107.69% YTD — elevated fear)"],
-            ["10Y Treasury", "4.44%"],
-            ["2Y Treasury", "4.12%"],
-            ["Fed Funds", "4.33%"],
-            ["USD/EUR", "1.08"],
-            ["Oil (WTI)", "$68.45"],
-        ],
-    }
-    data_tables["sector_performance"] = {
-        "headers": ["Sector (ETF)", "1M Return", "YTD Return"],
-        "rows": [
-            ["Energy (XLE)", "+13.64%", "+39.92%"],
-            ["Tech (XLK)", "-7.86%", "-9.76%"],
-            ["Healthcare (XLV)", "-9.00%", "-7.45%"],
-            ["Financials (XLF)", "-8.93%", "-12.71%"],
-            ["Utilities (XLU)", "+2.14%", "+8.33%"],
-            ["Consumer Discretionary (XLY)", "-6.21%", "-4.15%"],
-        ],
-    }
-    data_tables["holdings"] = {
-        "headers": ["Position", "Last Price", "1W Return", "1M Return", "YTD", "Consensus"],
-        "rows": [
-            ["AAPL", "$248.80", "+1.2%", "-3.5%", "+6.3%", "Buy"],
-            ["AMZN", "$199.34", "-0.8%", "-5.2%", "+3.8%", "Strong Buy"],
-            ["MSFT", "$356.77", "-7.1%", "-9.2%", "-24.6%", "Buy"],
-            ["UNH", "$259.02", "-7.2%", "-11.7%", "-23.0%", "Buy"],
-        ],
-    }
-    data_tables["catalysts"] = {
-        "headers": ["Date", "Company", "Event"],
-        "rows": [
-            ["Mar 30", "AAPL", "Q2 FY2026 Earnings Call"],
-            ["Apr 1", "AMZN", "Q1 FY2026 Earnings Call"],
-            ["Apr 1", "JPM HC", "JPM Healthcare Conference (UNH meeting)"],
-            ["Apr 21", "UNH", "Q1 2026 Earnings"],
-            ["May 5", "MSFT", "Q3 FY2026 Earnings"],
-            ["May 12", "GOOGL", "Q1 FY2026 Earnings"],
-            ["May 15", "META", "Q1 FY2026 Earnings"],
-            ["May 20", "NVDA", "Q1 FY2027 Earnings"],
-        ],
-    }
+    if watchlist_rows:
+        data_tables["watchlist_snapshot"] = {
+            "headers": ["Ticker", "Revenue (Latest Q)", "Rev YoY", "Op Margin", "FCF Margin"],
+            "rows": watchlist_rows,
+            "source_note": "Source: SEC quarterly filings (XBRL)",
+        }
+    if sentiment_rows:
+        data_tables["sentiment_overview"] = {
+            "headers": ["Ticker", "Score", "Label"],
+            "rows": sentiment_rows,
+        }
+    if catalyst_rows:
+        data_tables["catalysts"] = {
+            "headers": ["Date", "Ticker", "Filing"],
+            "rows": catalyst_rows,
+            "source_note": "Source: SEC EDGAR full-text search (EFTS)",
+        }
 
     ctx = {
         "event_id": ev.id,
-        "event_date": str(ev.start)[:10] if hasattr(ev, "start") else "",
-        "event_time": "10:00 AM IST",
+        "event_date": edt["event_date"],
+        "event_time": edt["event_time"],
         "confidence": cls.confidence,
         "tickers": a_base.tickers,
-        "sp500": "6,368.85 (-1.67% 1D, -7.82% 1M, -6.96% YTD)",
-        "nasdaq": "20,948.36 (-2.15% 1D, -9.87% YTD)",
-        "vix": "31.05 (+107.69% YTD — elevated fear)",
-        "treasury_10y": "4.44%",
-        "treasury_2y": "4.12%",
-        "fed_funds": "4.33%",
-        "usd_eur": "1.08",
-        "oil_wti": "$68.45",
+        "watchlist_trend": " | ".join(trend_strings) if trend_strings else _DASH,
     }
 
     return build_with_template(

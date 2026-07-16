@@ -288,8 +288,11 @@ class LlmEnricher:
             if v is None or v == "—" or v == "":
                 continue
             val = str(v)
-            if len(val) > 80:
-                val = val[:77] + "..."
+            # Trend/excerpt summaries are compact multi-quarter strings —
+            # give them more room than a scalar field before truncating.
+            limit = 240 if k.endswith(("_trend", "_excerpts")) else 80
+            if len(val) > limit:
+                val = val[: limit - 3] + "..."
             data_items.append(f"{k}: {val}")
 
         if data_items:

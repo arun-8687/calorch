@@ -49,3 +49,37 @@ def test_to_bullets_parses_markdown():
 Normal line"""
     bullets = e._to_bullets(raw)
     assert bullets == ["First point", "Second point", "Third point", "Numbered", "Normal line"]
+
+
+def test_to_bullets_keeps_snippet_quoting_output():
+    """_THINKING_PHRASES must not eat a bullet that quotes a guidance
+    excerpt or trend string — the analyst-grade redesign feeds ctx keys
+    like ``revenue_trend``/``guidance_excerpts`` into the LLM prompt and
+    expects the model's bullets to reference that data verbatim.
+    """
+    e = LlmEnricher(MockChatModel())
+    raw = (
+        "- Revenue grew to $100.0B in Q2 FY2026 (+17.6% YoY), continuing the "
+        "trend from Q1 FY2026's $95.0B print.\n"
+        "- Management said: \"We expect continued strong demand next quarter\" "
+        "in the latest 8-K press release.\n"
+        "- Gross margin expanded to 46.0%, up from 44.7% a year ago.\n"
+    )
+    bullets = e._to_bullets(raw)
+    assert len(bullets) == 3
+    assert any("100.0B" in b and "17.6%" in b for b in bullets)
+    assert any("We expect continued strong demand" in b for b in bullets)
+
+
+def test_ctx_prompt_truncates_trend_keys_to_240_not_80():
+    """Trend/excerpt ctx values get a longer truncation budget than plain
+    scalar fields — a 5-quarter trend string easily exceeds 80 chars.
+    """
+    e = LlmEnricher(MockChatModel())
+    long_trend = " | ".join(f"Q{i} FY2026: ${90 + i}.0B (+{i}.0% YoY)" for i in range(1, 6))
+    assert len(long_trend) > 80
+    prompt = e._ctx_prompt("AAPL", "Apple", "earnings_call", {"revenue_trend": long_trend}, "task")
+    assert long_trend[:100] in prompt  # not truncated at 80 chars
+    # A same-length plain (non-trend/excerpt) key is still capped at 80.
+    prompt_plain = e._ctx_prompt("AAPL", "Apple", "earnings_call", {"some_field": long_trend}, "task")
+    assert long_trend[:100] not in prompt_plain

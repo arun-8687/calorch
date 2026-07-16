@@ -10,13 +10,7 @@
   "metadata_table": {
     "table_type": "two_col",
     "rows": [
-      {"label": "Last Price", "value": "{price}"},
-      {"label": "Market Cap", "value": "{market_cap}"},
-      {"label": "CEO", "value": "{ceo_name}"},
-      {"label": "Employees", "value": "{employees}"},
-      {"label": "Sector", "value": "{sector}"},
-      {"label": "Consensus", "value": "{consensus_rating}"},
-      {"label": "Price Target", "value": "{mean_target}"}
+      {"label": "Latest Filing", "value": "{latest_filing}"}
     ]
   },
   "sections": [
@@ -25,7 +19,7 @@
       "title": "Company Overview",
       "source": "llm",
       "llm_method": "enrich_headline",
-      "fallback": ["{company_name} — {sector}. Conference meeting at {conference_name}."],
+      "fallback": ["{company_name} — Conference meeting at {conference_name}."],
       "prompt_addendum": "Write a 4-5 sentence company overview for a conference 1x1 prep pack. Cover: business description, investment thesis, and why this meeting matters in the conference context."
     },
     {
@@ -35,18 +29,32 @@
       "table_type": "two_col",
       "rows": [
         {"label": "Revenue", "value": "{rev_actual}"},
-        {"label": "EPS Actual vs Est", "value": "{eps_actual} vs {eps_estimate}"},
+        {"label": "EPS (Diluted)", "value": "{eps_actual}"},
         {"label": "Net Income", "value": "{net_income}"},
         {"label": "Operating Income", "value": "{operating_income}"}
       ]
+    },
+    {
+      "id": "quarterly_trend",
+      "title": "5-Quarter Trend",
+      "source": "data",
+      "table_type": "multi_col",
+      "rows_from": "quarterly_trend"
     },
     {
       "id": "recent_developments",
       "title": "Recent Developments",
       "source": "llm",
       "llm_method": "enrich_guidance",
-      "fallback": ["Recent stock performance and key developments."],
-      "prompt_addendum": "Write a concise paragraph (4-6 sentences) summarising recent developments. Cover: stock performance, major news, and any sector headwinds/tailwinds. Be factual."
+      "fallback": ["Recent financial trajectory and key developments."],
+      "prompt_addendum": "Write a concise paragraph (4-6 sentences) summarising recent developments. Cover: revenue/margin trajectory, major news, and any sector headwinds/tailwinds. Be factual."
+    },
+    {
+      "id": "guidance_commentary",
+      "title": "Guidance & Management Commentary",
+      "source": "data",
+      "table_type": "multi_col",
+      "rows_from": "narrative_docs"
     },
     {
       "id": "key_questions",
@@ -57,24 +65,19 @@
       "prompt_addendum": "Write 6-8 themed questions for a conference 1x1 meeting. Each should be a short paragraph (2-3 sentences). Format as 'Topic: Content/question...' Cover: strategy, financials, competition, and sector-specific themes."
     },
     {
+      "id": "sentiment",
+      "title": "Sentiment",
+      "source": "data",
+      "table_type": "two_col",
+      "rows_from": "sentiment"
+    },
+    {
       "id": "note_template",
       "title": "Note-Taking Template",
       "source": "static",
       "table_type": "multi_col",
       "headers": ["Topic", "Notes", "Investment Implication"],
       "blank_rows": 7
-    },
-    {
-      "id": "esg_governance",
-      "title": "ESG & Governance",
-      "source": "data",
-      "table_type": "two_col",
-      "rows": [
-        {"label": "Board Independence", "value": "{board_independence}"},
-        {"label": "Executive Compensation", "value": "{exec_comp}"},
-        {"label": "ESG Focus", "value": "{esg_focus}"},
-        {"label": "Key Metric", "value": "{esg_key_metric}"}
-      ]
     }
   ]
 }

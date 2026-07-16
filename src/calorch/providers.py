@@ -84,6 +84,11 @@ class ProviderBundle:
     sentiment: SentimentProvider
     sources: list[dict[str, str]] = field(default_factory=list)
     """List of {source_name: str, status: 'active'|'missing'|'error', detail: str}."""
+    ops: Any = None
+    """Delivery repository (``calorch.tools.Repository``), for the internal_review
+    agent's real pipeline-activity stats. ``None`` when not wired (e.g. tests
+    that build a ``ProviderBundle`` directly) — that agent degrades to
+    omitting its ops-derived sections, never fabricating stats."""
 
 
 # ---------------------------------------------------------------------------

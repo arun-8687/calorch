@@ -87,6 +87,15 @@ def test_build_providers_returns_bundle(base_settings: Settings) -> None:
     assert not hasattr(bundle, "macro")
 
 
+def test_provider_bundle_ops_defaults_to_none(base_settings: Settings) -> None:
+    """`build_providers` (the SEC/AlphaSense factory) never wires `ops` —
+    only `calorch.tools.make_providers` does, so a bare ProviderBundle
+    from here degrades cleanly for internal_review (no fabricated stats).
+    """
+    bundle = build_providers(base_settings)
+    assert bundle.ops is None
+
+
 def test_provider_bundle_has_sources(base_settings: Settings) -> None:
     bundle = build_providers(base_settings)
     names = {s["source_name"] for s in bundle.sources}
