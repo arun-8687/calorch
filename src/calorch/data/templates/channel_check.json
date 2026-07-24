@@ -10,9 +10,18 @@
   "metadata_table": {
     "table_type": "two_col",
     "rows": [
-      {"label": "Organizer", "value": "{organizer}"},
-      {"label": "Location", "value": "{location}"},
-      {"label": "Latest Filing", "value": "{latest_filing}"}
+      {
+        "label": "Organizer",
+        "value": "{organizer}"
+      },
+      {
+        "label": "Location",
+        "value": "{location}"
+      },
+      {
+        "label": "Latest Filing",
+        "value": "{latest_filing}"
+      }
     ]
   },
   "sections": [
@@ -21,7 +30,9 @@
       "title": "Revenue Overview",
       "source": "llm",
       "llm_method": "enrich_headline",
-      "fallback": ["{primary_ticker} reported revenue of {rev_actual} for {last_quarter_label} (YoY {rev_yoy})."],
+      "fallback": [
+        "{primary_ticker} reported revenue of {rev_actual} for {last_quarter_label} (YoY {rev_yoy})."
+      ],
       "prompt_addendum": "Write a 3-4 sentence revenue overview paragraph. Cover: last quarter revenue, YoY growth, and the multi-quarter trend. Be factual with numbers."
     },
     {
@@ -51,18 +62,52 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "DSO (Days Sales Outstanding)", "value": "{dso}"},
-        {"label": "DIO (Days Inventory Outstanding)", "value": "{dio}"},
-        {"label": "DPO (Days Payables Outstanding)", "value": "{dpo}"},
-        {"label": "Cash Conversion Cycle", "value": "{ccc}"},
-        {"label": "FCF ({last_quarter_label})", "value": "{fcf_q}"},
-        {"label": "FCF (TTM)", "value": "{fcf_ttm}"},
-        {"label": "CapEx ({last_quarter_label})", "value": "{capex_q}"},
-        {"label": "CapEx (TTM)", "value": "{capex_ttm}"},
-        {"label": "R&D ({last_quarter_label})", "value": "{rd_display}"},
-        {"label": "Buybacks ({last_quarter_label})", "value": "{buyback_q}"},
-        {"label": "Buybacks (TTM)", "value": "{buyback_ttm}"}
-      ]
+        {
+          "label": "DSO (Days Sales Outstanding)",
+          "value": "{dso}"
+        },
+        {
+          "label": "DIO (Days Inventory Outstanding)",
+          "value": "{dio}"
+        },
+        {
+          "label": "DPO (Days Payables Outstanding)",
+          "value": "{dpo}"
+        },
+        {
+          "label": "Cash Conversion Cycle",
+          "value": "{ccc}"
+        },
+        {
+          "label": "FCF ({last_quarter_label})",
+          "value": "{fcf_q}"
+        },
+        {
+          "label": "FCF (TTM)",
+          "value": "{fcf_ttm}"
+        },
+        {
+          "label": "CapEx ({last_quarter_label})",
+          "value": "{capex_q}"
+        },
+        {
+          "label": "CapEx (TTM)",
+          "value": "{capex_ttm}"
+        },
+        {
+          "label": "R&D ({last_quarter_label})",
+          "value": "{rd_display}"
+        },
+        {
+          "label": "Buybacks ({last_quarter_label})",
+          "value": "{buyback_q}"
+        },
+        {
+          "label": "Buybacks (TTM)",
+          "value": "{buyback_ttm}"
+        }
+      ],
+      "source_note": "Source: SEC company facts (XBRL), latest reported period"
     },
     {
       "id": "metrics_to_validate",
@@ -87,14 +132,26 @@
         {
           "section": "Demand & Volume",
           "questions": [
-            {"q": "Q1. How would you characterize demand over the past 90 days?", "followup": "Any regional differences?", "maps_to": "Revenue Volume"},
-            {"q": "Q2. What demand signals are you seeing from key markets?", "followup": "Any government procurement shifts?", "maps_to": "Geographic Revenue"}
+            {
+              "q": "Q1. How would you characterize demand over the past 90 days?",
+              "followup": "Any regional differences?",
+              "maps_to": "Revenue Volume"
+            },
+            {
+              "q": "Q2. What demand signals are you seeing from key markets?",
+              "followup": "Any government procurement shifts?",
+              "maps_to": "Geographic Revenue"
+            }
           ]
         },
         {
           "section": "Pricing Trends",
           "questions": [
-            {"q": "Q3. Are you seeing promotional intensity beyond normal patterns?", "followup": "Any trade-in program changes?", "maps_to": "ASP Trajectory"}
+            {
+              "q": "Q3. Are you seeing promotional intensity beyond normal patterns?",
+              "followup": "Any trade-in program changes?",
+              "maps_to": "ASP Trajectory"
+            }
           ]
         }
       ],
@@ -105,7 +162,14 @@
       "title": "Channel Finding Tracker",
       "source": "data",
       "table_type": "multi_col",
-      "headers": ["Model Metric", "Our Model", "Channel Finding", "Variance", "Thesis Implication", "Conf."],
+      "headers": [
+        "Model Metric",
+        "Our Model",
+        "Channel Finding",
+        "Variance",
+        "Thesis Implication",
+        "Conf."
+      ],
       "blank_rows": 12
     },
     {
@@ -113,7 +177,14 @@
       "title": "Contact Log",
       "source": "data",
       "table_type": "multi_col",
-      "headers": ["Date", "Contact / Company", "Key Finding", "Model Impact", "Conf.", "Follow-up Questions"],
+      "headers": [
+        "Date",
+        "Contact / Company",
+        "Key Finding",
+        "Model Impact",
+        "Conf.",
+        "Follow-up Questions"
+      ],
       "blank_rows": 8
     }
   ]

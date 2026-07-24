@@ -65,7 +65,10 @@ def build_analyst_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=N
             ("Cash", "cash"), ("Net Debt", "net_debt"), ("FCF Margin", "fcf_margin"),
         )
     ]
-    data_tables["fundamentals_snapshot"] = {"headers": ["Metric", "Value"], "rows": fs_rows}
+    data_tables["fundamentals_snapshot"] = {
+        "headers": ["Metric", "Value"], "rows": fs_rows,
+        "source_note": "Source: SEC company facts (XBRL), latest reported period",
+    }
 
     return build_with_template("analyst_meeting", ctx, data_tables, llm_call, providers)
 

@@ -59,6 +59,7 @@ def build_kol_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None)
                 ["Operating Margin", tctx["operating_margin"]],
                 ["FCF Margin", tctx["fcf_margin"]],
             ],
+            "source_note": "Source: SEC company facts (XBRL), latest reported period",
         }
 
     return build_with_template("kol_meeting", ctx, data_tables, llm_call, providers)

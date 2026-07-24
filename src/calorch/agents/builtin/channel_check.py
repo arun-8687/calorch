@@ -92,12 +92,14 @@ def build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
             "headers": ["Segment", "Revenue", "Period end"],
             "rows": [[s.get("segment_label") or s.get("segment_member", "—"),
                       fmt_b(s.get("value")), s.get("period_end", "—")] for s in seg[:6]],
+            "source_note": "Source: SEC iXBRL segment disclosure (latest 10-Q/10-K)",
         }
     if geo:
         data_tables["geo"] = {
             "headers": ["Region", "Revenue", "Period end"],
             "rows": [[g.get("segment_label") or g.get("segment_member", "—"),
                       fmt_b(g.get("value")), g.get("period_end", "—")] for g in geo[:6]],
+            "source_note": "Source: SEC iXBRL geographic disclosure (latest 10-Q/10-K)",
         }
     mp = _margin_profile_table(history)
     if mp:
@@ -127,6 +129,7 @@ def build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
              last_q_label, "Margin trajectory signal"],
             ["Inventory days (DIO)", _days(dio), last_q_label, "Channel inventory health"],
         ],
+        "source_note": "Source: SEC company facts (XBRL), latest reported period",
     }
 
     ctx = ticker_context(

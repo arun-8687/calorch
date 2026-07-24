@@ -35,6 +35,10 @@ from calorch.analysis import EventAnalysis
 _PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
 _BARE_DASH = {"—", "-"}
 
+# A financial magnitude an analyst would expect sourced: currency ($1.2B),
+# a percentage (16.6%), a ratio (1.2x), or a scaled figure (12.3 bn / 4.5M).
+_FINANCIAL_MAGNITUDE = re.compile(r"[$€£]\s?\d|\d\s?%|\d\s?x\b|\d\s?(?:bn|B|M)\b", re.IGNORECASE)
+
 DEFAULT_BLOCKLIST: tuple[str, ...] = (
     "Dr. Sarah Chen",
     "8:00 PM IST",
@@ -160,10 +164,16 @@ def _check_table_sourcing(analysis: EventAnalysis) -> dict[str, Any]:
     for heading, table, _bullets in _table_pairing(analysis):
         if table is None:
             continue
-        has_numbers = any(
-            re.search(r"\d", str(cell)) for row in (table.get("rows") or []) for cell in row
+        # Require attribution only for tables carrying a financial MAGNITUDE
+        # ($, %, x, or a B/M/bn scaled figure) — not bare digits, which also
+        # occur in dates ("period ended 2026-03-28"), form codes ("10-Q"), or
+        # labels ("Q2 FY2026"), none of which are sourced financial claims.
+        has_magnitude = any(
+            _FINANCIAL_MAGNITUDE.search(str(cell))
+            for row in (table.get("rows") or [])
+            for cell in (row[1:] if len(row) > 1 else row)
         )
-        if not has_numbers:
+        if not has_magnitude:
             continue
         if table.get("source_note"):
             continue

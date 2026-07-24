@@ -10,7 +10,10 @@
   "metadata_table": {
     "table_type": "two_col",
     "rows": [
-      {"label": "Latest Filing", "value": "{latest_filing}"}
+      {
+        "label": "Latest Filing",
+        "value": "{latest_filing}"
+      }
     ]
   },
   "sections": [
@@ -19,7 +22,9 @@
       "title": "Company Overview",
       "source": "llm",
       "llm_method": "enrich_headline",
-      "fallback": ["{company_name} — Management 1:1 with {role}."],
+      "fallback": [
+        "{company_name} — Management 1:1 with {role}."
+      ],
       "prompt_addendum": "Write a 4-5 sentence company overview for a management meeting prep pack. Cover: business description, recent financial trajectory, key investment thesis points, and why this meeting matters. Be factual."
     },
     {
@@ -28,9 +33,16 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "Revenue", "value": "{rev_actual}"},
-        {"label": "EPS (Diluted)", "value": "{eps_actual}"}
-      ]
+        {
+          "label": "Revenue",
+          "value": "{rev_actual}"
+        },
+        {
+          "label": "EPS (Diluted)",
+          "value": "{eps_actual}"
+        }
+      ],
+      "source_note": "Source: SEC company facts (XBRL), latest reported period"
     },
     {
       "id": "quarterly_trend",
@@ -52,7 +64,9 @@
       "title": "Recent Developments",
       "source": "llm",
       "llm_method": "enrich_guidance",
-      "fallback": ["Recent financial trajectory and key developments."],
+      "fallback": [
+        "Recent financial trajectory and key developments."
+      ],
       "prompt_addendum": "Write a concise paragraph (4-6 sentences) summarising recent developments for this company. Cover: revenue/margin trajectory, major news, strategic shifts, and any recent earnings highlights. Be factual with numbers."
     },
     {
@@ -82,7 +96,13 @@
       "title": "Follow-Up Template",
       "source": "data",
       "table_type": "multi_col",
-      "headers": ["Topic", "Key Takeaway", "Action Item", "Owner", "Due Date"],
+      "headers": [
+        "Topic",
+        "Key Takeaway",
+        "Action Item",
+        "Owner",
+        "Due Date"
+      ],
       "blank_rows": 5
     },
     {
@@ -91,11 +111,24 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "Revenue Growth YoY", "value": "{rev_growth}"},
-        {"label": "Operating Margin Δ (vs PY)", "value": "{op_margin_delta}"},
-        {"label": "FCF Margin", "value": "{fcf_margin}"},
-        {"label": "R&D % of Revenue", "value": "{rd_pct_revenue}"}
-      ]
+        {
+          "label": "Revenue Growth YoY",
+          "value": "{rev_growth}"
+        },
+        {
+          "label": "Operating Margin Δ (vs PY)",
+          "value": "{op_margin_delta}"
+        },
+        {
+          "label": "FCF Margin",
+          "value": "{fcf_margin}"
+        },
+        {
+          "label": "R&D % of Revenue",
+          "value": "{rd_pct_revenue}"
+        }
+      ],
+      "source_note": "Source: SEC company facts (XBRL), latest reported period"
     }
   ]
 }

@@ -10,7 +10,10 @@
   "metadata_table": {
     "table_type": "two_col",
     "rows": [
-      {"label": "Latest Filing", "value": "{latest_filing}"}
+      {
+        "label": "Latest Filing",
+        "value": "{latest_filing}"
+      }
     ]
   },
   "sections": [
@@ -19,7 +22,9 @@
       "title": "Company Overview",
       "source": "llm",
       "llm_method": "enrich_headline",
-      "fallback": ["{company_name} — Conference meeting at {conference_name}."],
+      "fallback": [
+        "{company_name} — Conference meeting at {conference_name}."
+      ],
       "prompt_addendum": "Write a 4-5 sentence company overview for a conference 1x1 prep pack. Cover: business description, investment thesis, and why this meeting matters in the conference context."
     },
     {
@@ -28,11 +33,24 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "Revenue", "value": "{rev_actual}"},
-        {"label": "EPS (Diluted)", "value": "{eps_actual}"},
-        {"label": "Net Income", "value": "{net_income}"},
-        {"label": "Operating Income", "value": "{operating_income}"}
-      ]
+        {
+          "label": "Revenue",
+          "value": "{rev_actual}"
+        },
+        {
+          "label": "EPS (Diluted)",
+          "value": "{eps_actual}"
+        },
+        {
+          "label": "Net Income",
+          "value": "{net_income}"
+        },
+        {
+          "label": "Operating Income",
+          "value": "{operating_income}"
+        }
+      ],
+      "source_note": "Source: SEC company facts (XBRL), latest reported period"
     },
     {
       "id": "quarterly_trend",
@@ -54,7 +72,9 @@
       "title": "Recent Developments",
       "source": "llm",
       "llm_method": "enrich_guidance",
-      "fallback": ["Recent financial trajectory and key developments."],
+      "fallback": [
+        "Recent financial trajectory and key developments."
+      ],
       "prompt_addendum": "Write a concise paragraph (4-6 sentences) summarising recent developments. Cover: revenue/margin trajectory, major news, and any sector headwinds/tailwinds. Be factual."
     },
     {
@@ -84,7 +104,11 @@
       "title": "Note-Taking Template",
       "source": "data",
       "table_type": "multi_col",
-      "headers": ["Topic", "Notes", "Investment Implication"],
+      "headers": [
+        "Topic",
+        "Notes",
+        "Investment Implication"
+      ],
       "blank_rows": 7
     }
   ]
