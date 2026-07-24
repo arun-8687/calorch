@@ -234,8 +234,42 @@ vector/hybrid retrieval.
 | `SEC_USER_AGENT` | **Set a real contact** (`"Your Name you@example.com"`) — SEC EDGAR requires it |
 | `SEC_WATCHLIST` | CSV of tickers for ingestion (default 10 mega-caps) |
 | `USE_IXBRL_SEGMENTS`, `USE_SEC_EFTS` | SEC feature flags (default `true`) |
+| `SEC_BACKEND` | `native` (default) or `edgartools` — see below |
 | `ALPHASENSE_API_KEY` / `ALPHASENSE_CLIENT_ID` / `ALPHASENSE_CLIENT_SECRET` / `ALPHASENSE_USERNAME` / `ALPHASENSE_PASSWORD` | AlphaSense OAuth2 credentials (Key Vault refs). Empty → narrative/transcripts/sentiment degrade to empty |
 | `ALPHASENSE_BASE_URL`, `USE_ALPHASENSE` | API base (default `https://api.alpha-sense.com`); set `USE_ALPHASENSE=false` to disable |
+
+#### SEC fundamentals backend: `native` vs `edgartools`
+
+`SEC_BACKEND` selects the client behind `fundamentals` (`src/calorch/config.py`).
+Leave it unset for the default, `native` — `SecIxbrlClient`
+(`src/calorch/sec_ixbrl.py`), a dependency-free parser of SEC's iXBRL
+companyfacts JSON. Setting `SEC_BACKEND=edgartools` swaps in
+`EdgarToolsClient` (`src/calorch/sec_edgartools.py`), a thin wrapper over
+the [edgartools](https://github.com/dgunning/edgartools) library, with the
+same `latest_fundamentals(cik, ticker)` output contract.
+
+`edgartools` is **not** a core dependency (kept out to keep local/library
+installs lean) — it ships only via the `edgar` extra. This Function App's
+deployment dependency set is the `azure` extra
+(`pip install calorch[azure]`), and `edgartools>=5.40` is included there,
+so a standard Azure deploy has it available and `SEC_BACKEND=edgartools`
+works without a separate install step. If your deploy pipeline generates a
+pinned `requirements.txt` instead of installing `pyproject.toml` extras
+directly, make sure it's regenerated from `calorch[azure]` (or add
+`edgartools>=5.40` to it explicitly) so the package is actually present
+server-side — `providers.build_providers` and `data_ingestion` both log a
+warning and silently fall back to `native` if `edgartools` isn't
+importable, which is safe but defeats the point of setting the env var.
+
+Trade-off: `edgartools` pulls in a heavier dependency tree (pandas, plus
+its own HTTP/caching layer) than the native parser, which costs cold-start
+time. This is mitigated here because that import only happens inside the
+nightly `timer_ingest` → `run_daily_ingestion` data-ingestion path (§9) —
+an off-critical-path background function — not inside the weekly
+orchestrator's report-rendering activities, so the extra cold-start cost
+never sits on the latency path a user or approver is waiting on (the
+orchestrator reads pre-ingested fundamentals from blob via
+`USE_BLOB_PROVIDERS=true`, per §5.2).
 
 ### 5.8 Extensibility & observability
 

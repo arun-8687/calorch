@@ -54,6 +54,11 @@ azure = [
   "azure-identity>=1.16",
   "azure-functions>=1.21,<2.0",
   "azure-functions-durable>=1.5",
+  # So SEC_BACKEND=edgartools is deployable out of the box on Azure without
+  # a separate extras install step (Oryx remote build installs whatever
+  # pip extras the deploy pulls in). Stays out of core `dependencies` to
+  # keep local/library installs lean — see README "SEC backend" section.
+  "edgartools>=5.40",
 ]
 edgar = [
   "edgartools>=5.40",

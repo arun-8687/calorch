@@ -106,7 +106,9 @@ that's not installed, both `providers.build_providers` and
 `calorch.data_ingestion` log a warning and fall back to the native client
 automatically. `segments` and `filings` always use the native SEC clients —
 edgartools has no equivalent for iXBRL segment extraction or EFTS full-text
-search.
+search. `edgartools` is also included in the Azure deployment's `azure`
+extra (see `deploy/azure-functions.md` §5.7), so `SEC_BACKEND=edgartools`
+works out of the box there without a separate install step.
 
 **Qualitative backends.** `narrative` and `sentiment` are backend-selectable
 independently (`NARRATIVE_BACKEND` / `SENTIMENT_BACKEND`, default `"auto"`).

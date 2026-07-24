@@ -462,47 +462,82 @@ class SecIxbrlClient:
 
         result: dict[str, Any] = {"source": "sec-ixbrl", "ticker": ticker, "cik": cik}
 
-        _MAP: dict[str, tuple[str, str]] = {
-            "revenue":          ("Revenues", "USD"),
-            "gross_profit":     ("GrossProfit", "USD"),
-            "operating_income": ("OperatingIncomeLoss", "USD"),
-            "net_income":       ("NetIncomeLoss", "USD"),
-            "eps_diluted":      ("EarningsPerShareDiluted", "USD/shares"),
-            "total_assets":     ("Assets", "USD"),
-            "total_liabilities":("Liabilities", "USD"),
-            "equity":           ("StockholdersEquity", "USD"),
-            "cash":             ("CashAndCashEquivalentsAtCarryingValue", "USD"),
-            "long_term_debt":   ("LongTermDebt", "USD"),
-            "capex":            ("PaymentsToAcquirePropertyPlantAndEquipment", "USD"),
-            "rd_expense":       ("ResearchAndDevelopmentExpense", "USD"),
-            "shares_out":       ("CommonStockSharesOutstanding", "shares"),
-            "inventory":        ("InventoryNet", "USD"),
-            "receivables":      ("AccountsReceivableNetCurrent", "USD"),
-            "cost_of_revenue":  ("CostOfGoodsAndServicesSold", "USD"),
-            "ocf":              ("NetCashProvidedByUsedInOperatingActivities", "USD"),
-            "buybacks":         ("PaymentsForRepurchaseOfCommonStock", "USD"),
-            "dividends_paid":   ("PaymentsOfDividendsCommonStock", "USD"),
-            "accounts_payable": ("AccountsPayableCurrent", "USD"),
-            "current_assets":   ("AssetsCurrent", "USD"),
-            "current_liabilities": ("LiabilitiesCurrent", "USD"),
+        # Each key maps to an ORDERED tuple of candidate us-gaap concepts +
+        # the unit. The first concept that has any entries wins (its entries
+        # are internally consistent — we never merge across concepts). This
+        # handles filers that report the same line under different tags: most
+        # notably revenue, where modern ASC 606 filers (AAPL, MSFT, ...) use
+        # RevenueFromContractWithCustomerExcludingAssessedTax and the plain
+        # `Revenues` tag went stale after FY2018 — trying the contract-revenue
+        # tag first keeps revenue current instead of surfacing 2018 figures.
+        _MAP: dict[str, tuple[tuple[str, ...], str]] = {
+            "revenue":          (("RevenueFromContractWithCustomerExcludingAssessedTax",
+                                  "Revenues",
+                                  "RevenueFromContractWithCustomerIncludingAssessedTax",
+                                  "SalesRevenueNet"), "USD"),
+            "gross_profit":     (("GrossProfit",), "USD"),
+            "operating_income": (("OperatingIncomeLoss",), "USD"),
+            "net_income":       (("NetIncomeLoss",), "USD"),
+            "eps_diluted":      (("EarningsPerShareDiluted",), "USD/shares"),
+            "total_assets":     (("Assets",), "USD"),
+            "total_liabilities":(("Liabilities",), "USD"),
+            "equity":           (("StockholdersEquity",), "USD"),
+            "cash":             (("CashAndCashEquivalentsAtCarryingValue",
+                                  "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"), "USD"),
+            "long_term_debt":   (("LongTermDebt", "LongTermDebtNoncurrent"), "USD"),
+            "capex":            (("PaymentsToAcquirePropertyPlantAndEquipment",), "USD"),
+            "rd_expense":       (("ResearchAndDevelopmentExpense",), "USD"),
+            "shares_out":       (("CommonStockSharesOutstanding",), "shares"),
+            "inventory":        (("InventoryNet",), "USD"),
+            "receivables":      (("AccountsReceivableNetCurrent",), "USD"),
+            "cost_of_revenue":  (("CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"), "USD"),
+            "ocf":              (("NetCashProvidedByUsedInOperatingActivities",), "USD"),
+            "buybacks":         (("PaymentsForRepurchaseOfCommonStock",), "USD"),
+            "dividends_paid":   (("PaymentsOfDividendsCommonStock", "PaymentsOfDividends"), "USD"),
+            "accounts_payable": (("AccountsPayableCurrent",), "USD"),
+            "current_assets":   (("AssetsCurrent",), "USD"),
+            "current_liabilities": (("LiabilitiesCurrent",), "USD"),
         }
 
-        for key, (concept, unit) in _MAP.items():
+        for key, (concepts, unit) in _MAP.items():
             result[key] = None
             result[f"{key}_period"] = None
             result[f"{key}_form"] = None
-            entries = facts.get(concept, {}).get("units", {}).get(unit, [])
+            entries: list[dict[str, Any]] = []
+            for concept in concepts:
+                entries = facts.get(concept, {}).get("units", {}).get(unit, [])
+                if entries:
+                    break
             if not entries:
                 continue
-            ranked = sorted(
-                entries,
-                key=lambda e: (
-                    e.get("end", ""),
-                    0 if e.get("frame") is None else 1,
-                    1 if e.get("form") == "10-Q" else 0,
-                ),
-                reverse=True,
-            )
+            # DURATION (flow) concepts carry a non-empty "start" on their
+            # entries; INSTANT concepts (Assets, StockholdersEquity, Cash,
+            # ...) carry only "end". For duration concepts, sorting purely
+            # by "end" can surface a 10-K's full-fiscal-year period ahead of
+            # the true latest quarter (a FY end date is >= the last quarter
+            # end date it contains), silently reporting an annual figure as
+            # "the quarter". Prefer quarterly-length periods (~80-100 days)
+            # first, then recency, then the existing frame/10-Q tie-breakers.
+            # Instant concepts keep the original end-date-only ordering.
+            is_duration = any(e.get("start") for e in entries)
+            if is_duration:
+                def _sort_key(e: dict[str, Any]) -> tuple[int, str, int, int]:
+                    days = _period_days(e.get("start", "") or "", e.get("end", "") or "")
+                    is_quarterly = 1 if 80 <= days <= 100 else 0
+                    return (
+                        is_quarterly,
+                        e.get("end", ""),
+                        0 if e.get("frame") is None else 1,
+                        1 if e.get("form") == "10-Q" else 0,
+                    )
+            else:
+                def _sort_key(e: dict[str, Any]) -> tuple[str, int, int]:
+                    return (
+                        e.get("end", ""),
+                        0 if e.get("frame") is None else 1,
+                        1 if e.get("form") == "10-Q" else 0,
+                    )
+            ranked = sorted(entries, key=_sort_key, reverse=True)
             if not ranked:
                 continue
             best = ranked[0]
