@@ -261,20 +261,38 @@ def guidance_filings_table(filings_hits: list[dict[str, Any]] | None) -> dict[st
     }
 
 
+def _snippet_provenance_suffix(hits: list[dict[str, Any]]) -> str:
+    """" (excerpts LLM-selected)" / " (keyword-selected)" / " (mixed)" based on
+    each hit's ``snippet_source`` ("llm"|"heuristic", set at ingestion time).
+
+    Hits missing the field entirely (older/ad-hoc data) are ignored; if none
+    of the hits carry the field, no suffix is added.
+    """
+    sources = {h.get("snippet_source") for h in hits if h.get("snippet_source")}
+    if not sources:
+        return ""
+    if sources == {"llm"}:
+        return " (excerpts LLM-selected)"
+    if sources == {"heuristic"}:
+        return " (keyword-selected)"
+    return " (mixed)"
+
+
 def narrative_docs_table(narrative_hits: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     """SEC narrative / AlphaSense guidance excerpts -> Date | Type | Excerpt table."""
     if not narrative_hits:
         return None
+    hits = narrative_hits[:8]
     rows = [
         [h.get("date") or "—", h.get("type") or "—", truncate_text(h.get("snippet"), 200) or "—"]
-        for h in narrative_hits[:8]
+        for h in hits
     ]
     if not rows:
         return None
     return {
         "headers": ["Date", "Type", "Excerpt"],
         "rows": rows,
-        "source_note": "Source: SEC 8-K press release / MD&A",
+        "source_note": "Source: SEC 8-K press release / MD&A" + _snippet_provenance_suffix(hits),
     }
 
 
@@ -385,6 +403,24 @@ def _fcf_margin_ttm(history: dict[str, Any]) -> str:
     return fmt_pct(fcf_ttm / rev_ttm * 100)
 
 
+def _fcf_conversion_trend_str(history: dict[str, Any], *, max_quarters: int = 5) -> str:
+    """Per-quarter FCF/net-income conversion ratio, for the "what changed"
+    LLM prompt — makes FCF-diverging-from-earnings visible even though
+    :func:`fin_metrics.trend_summary_strings` doesn't track it (it only
+    covers revenue/margin/FCF, not the FCF-vs-NI comparison).
+    """
+    quarterly = (history.get("quarterly") or [])[:max_quarters]
+    parts: list[str] = []
+    for r in quarterly:
+        fcf = r.get("fcf")
+        ni = r.get("net_income")
+        if not isinstance(fcf, (int, float)) or not isinstance(ni, (int, float)) or not ni:
+            continue
+        label = r.get("label", "—")
+        parts.append(f"{label}: FCF/NI {fcf / ni * 100:.0f}%")
+    return " | ".join(parts) if parts else "—"
+
+
 def ticker_trends(ticker: str, providers: Any, cik: str | None) -> dict[str, Any]:
     """Multi-quarter SEC trend data for one ticker: tables + LLM context.
 
@@ -436,11 +472,14 @@ def ticker_trends(ticker: str, providers: Any, cik: str | None) -> dict[str, Any
         if eps_yoy is not None:
             ctx["eps_yoy"] = f"{eps_yoy:+.1f}%"
 
+    strings = fm.trend_summary_strings(history)
+    strings["fcf_conversion_trend"] = _fcf_conversion_trend_str(history)
+
     return {
         "history": history,
         "tables": tables,
         "ctx": ctx,
-        "strings": fm.trend_summary_strings(history),
+        "strings": strings,
     }
 
 
@@ -453,6 +492,7 @@ def ticker_context(
     event_date: str = "",
     event_time: str = "",
     cik: str = "",
+    trends: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a template context dict for one ticker from SEC fundamentals.
 
@@ -461,6 +501,11 @@ def ticker_context(
     source, so those fields are simply absent — a template row referencing
     a key that isn't here resolves to an unfilled ``{placeholder}`` and the
     engine's dash-row suppression drops it, rather than us fabricating "—".
+
+    ``trends``: pass the return value of a prior :func:`ticker_trends` call
+    when the caller already fetched it, so ``fundamentals_history`` isn't
+    hit twice (``ticker_trends`` fetches it internally) for a single
+    ticker/event. Omit it and this fetches trends itself, as before.
     """
     funds: dict[str, Any] = {}
     if providers and cik:
@@ -472,7 +517,8 @@ def ticker_context(
             log.warning("SEC iXBRL fetch failed for %s: %s", ticker, e)
 
     f = funds
-    trends = ticker_trends(ticker, providers, cik) if (providers and cik) else {"ctx": {}, "strings": {}}
+    if trends is None:
+        trends = ticker_trends(ticker, providers, cik) if (providers and cik) else {"ctx": {}, "strings": {}}
     tctx = trends.get("ctx", {})
 
     def _get(*keys: str, fmt_fn=None):
@@ -519,6 +565,7 @@ def ticker_context(
         "revenue_trend": trends.get("strings", {}).get("revenue_trend", "—"),
         "margin_trend": trends.get("strings", {}).get("margin_trend", "—"),
         "fcf_trend": trends.get("strings", {}).get("fcf_trend", "—"),
+        "fcf_conversion_trend": trends.get("strings", {}).get("fcf_conversion_trend", "—"),
     }
 
 

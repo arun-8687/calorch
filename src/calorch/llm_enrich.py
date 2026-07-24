@@ -115,6 +115,49 @@ _THINKING_PHRASES = {
 _THINKING_RATIO_THRESHOLD = 0.45
 
 
+def _whats_changed_grounding(context: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Pull the trend strings out of ``context`` and gate on real data.
+
+    Returns ``(revenue_trend, margin_trend, fcf_trend, fcf_conversion_trend)``
+    when at least one trend string carries real data, else ``None`` — the
+    caller treats ``None`` as "nothing to analyze" and self-omits rather
+    than asking the model to comment on absent data.
+    """
+    revenue_trend = str(context.get("revenue_trend") or "").strip()
+    margin_trend = str(context.get("margin_trend") or "").strip()
+    fcf_trend = str(context.get("fcf_trend") or "").strip()
+    fcf_conversion_trend = str(context.get("fcf_conversion_trend") or "").strip()
+    if not any(v and v != "—" for v in (revenue_trend, margin_trend, fcf_trend)):
+        return None
+    return revenue_trend, margin_trend, fcf_trend, fcf_conversion_trend
+
+
+def _whats_changed_fallback_bullets(
+    ticker: str,
+    revenue_trend: str,
+    margin_trend: str,
+    fcf_trend: str,
+    fcf_conversion_trend: str,
+) -> list[str]:
+    """Rule-based, data-only synthesis used when the LLM is unavailable, the
+    call fails, or its output doesn't survive the thinking-phrase filter.
+
+    Every bullet quotes a trend string verbatim — no interpretation beyond
+    labelling which metric family it belongs to — so it stays strictly
+    grounded even without a model in the loop.
+    """
+    bullets: list[str] = []
+    if revenue_trend and revenue_trend != "—":
+        bullets.append(f"Revenue trajectory ({ticker}): {revenue_trend}")
+    if margin_trend and margin_trend != "—":
+        bullets.append(f"Margin trajectory: {margin_trend}")
+    if fcf_trend and fcf_trend != "—":
+        bullets.append(f"Free cash flow trajectory: {fcf_trend}")
+    if fcf_conversion_trend and fcf_conversion_trend != "—":
+        bullets.append(f"FCF-to-net-income conversion: {fcf_conversion_trend}")
+    return bullets
+
+
 class LlmEnricher:
     """Wraps a langchain chat model to produce research-quality bullets."""
 
@@ -237,6 +280,54 @@ class LlmEnricher:
         user = self._ctx_prompt(ticker, company, "earnings_call", ctx, "key questions for management / channel checks")
         text = self._call(system, user)
         return self._to_bullets(text) or []
+
+    def enrich_whats_changed(
+        self,
+        *,
+        ticker: str,
+        company: str = "",
+        context: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """Analyst synthesis: what MATERIALLY CHANGED QoQ/YoY, and why it matters.
+
+        This is deliberately not a row-by-row restatement of the trend
+        table — it asks the model to identify inflections (margin turns,
+        FCF diverging from net income, working-capital movement, growth
+        deceleration/acceleration) and tie each to a specific number.
+
+        Strict grounding: if none of ``revenue_trend``/``margin_trend``/
+        ``fcf_trend`` carry real data, the section has nothing to analyze
+        and this returns ``[]`` *before* ever calling the model, so the
+        template section self-omits rather than emitting a canned "no
+        material change" bullet.
+        """
+        ctx = context or {}
+        grounded = _whats_changed_grounding(ctx)
+        if grounded is None:
+            return []
+        revenue_trend, margin_trend, fcf_trend, fcf_conversion_trend = grounded
+
+        system = (
+            "You are a senior equity research analyst. Do NOT restate every row of "
+            "the trend table. Instead, identify what MATERIALLY CHANGED quarter-over-"
+            "quarter and year-over-year, and why it matters to the investment thesis. "
+            "Prioritise: margin inflection (acceleration/deceleration), free cash flow "
+            "diverging from net income (cash conversion), working-capital movement, and "
+            "revenue growth deceleration/acceleration. Write 3-4 bullet points. Each "
+            "bullet MUST cite a specific number from the provided data and state the "
+            "'so what' for the thesis, not just the number."
+            + _GROUNDING
+        )
+        user = self._ctx_prompt(
+            ticker, company, "earnings_call", ctx,
+            "analyst synthesis of what materially changed this quarter and why it matters "
+            "(not a restatement of the trend table)",
+        )
+        text = self._call(system, user)
+        bullets = self._to_bullets(text)
+        return bullets or _whats_changed_fallback_bullets(
+            ticker, revenue_trend, margin_trend, fcf_trend, fcf_conversion_trend,
+        )
 
     def enrich_channel_check_questions(
         self,
@@ -402,3 +493,17 @@ class NoOpEnricher:
 
     def enrich_channel_check_questions(self, **_: Any) -> list[str]:
         return []
+
+    def enrich_whats_changed(
+        self, *, ticker: str = "", context: dict[str, Any] | None = None, **_: Any
+    ) -> list[str]:
+        """No LLM available, but this section's content is data-only anyway:
+        reuse the same grounded, rule-based synthesis ``LlmEnricher`` falls
+        back to when its model call fails. Still self-omits (returns ``[]``)
+        when the trend data itself is absent.
+        """
+        ctx = context or {}
+        grounded = _whats_changed_grounding(ctx)
+        if grounded is None:
+            return []
+        return _whats_changed_fallback_bullets(ticker, *grounded)

@@ -47,7 +47,7 @@
     {
       "id": "action_items",
       "title": "Action Items",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Item", "Owner", "Status", "Due Date"],
       "blank_rows": 5

@@ -145,6 +145,7 @@ def build_earnings_call(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
         "revenue_trend": strings.get("revenue_trend", _DASH),
         "margin_trend": strings.get("margin_trend", _DASH),
         "fcf_trend": strings.get("fcf_trend", _DASH),
+        "fcf_conversion_trend": strings.get("fcf_conversion_trend", _DASH),
         "guidance_excerpts": guidance_excerpts_str(narrative_hits),
         "recent_doc_titles": recent_doc_titles_str(narrative_hits),
     }

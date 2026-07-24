@@ -137,6 +137,7 @@ def build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
         event_date=edt["event_date"],
         event_time=edt["event_time"],
         cik=cik or "",
+        trends=trends,
     )
 
     organizer, location = _contact_and_location(ev)

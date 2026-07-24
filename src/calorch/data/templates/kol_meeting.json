@@ -91,7 +91,7 @@
     {
       "id": "hypothesis_table",
       "title": "Hypothesis Tracker",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Hypothesis", "Supporting Evidence", "Expert's View", "Investment Implication"],
       "blank_rows": 4
@@ -99,7 +99,7 @@
     {
       "id": "note_template",
       "title": "Note-Taking Template",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Question #", "Expert Response", "Key Insight", "Follow-Up Needed"],
       "blank_rows": 12

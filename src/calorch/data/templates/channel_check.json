@@ -103,7 +103,7 @@
     {
       "id": "channel_tracking",
       "title": "Channel Finding Tracker",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Model Metric", "Our Model", "Channel Finding", "Variance", "Thesis Implication", "Conf."],
       "blank_rows": 12
@@ -111,7 +111,7 @@
     {
       "id": "contact_log",
       "title": "Contact Log",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Date", "Contact / Company", "Key Finding", "Model Impact", "Conf.", "Follow-up Questions"],
       "blank_rows": 8

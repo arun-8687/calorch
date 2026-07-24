@@ -72,7 +72,7 @@
     {
       "id": "note_template",
       "title": "Note-Taking Template",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Topic", "Analyst View", "Our View", "Action"],
       "blank_rows": 5

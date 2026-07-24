@@ -45,11 +45,17 @@ _CASES = {
         "1:1 with CFO of AAPL",
         {
             "title": "MANAGEMENT MEETING BRIEFING",
+            # "What Changed This Quarter" self-omits here (no providers ->
+            # no trend data to ground it in). "Follow-Up Template" is a
+            # fillable note-taking grid that renders unconditionally (it
+            # doesn't depend on data), now that it's a "data"-source
+            # section instead of the dead "static" one that never rendered.
             "section_headings": [
                 "Company Overview",
                 "Recent Developments",
+                "Follow-Up Template",
             ],
-            "n_tables": 0,
+            "n_tables": 1,
             "role_focus": "CFO",
         },
     ),
@@ -57,11 +63,14 @@ _CASES = {
         "Tech Conference AAPL MSFT NVDA",
         {
             "title": "CONFERENCE PREP PACK",
+            # Same self-omission for "What Changed This Quarter"; the
+            # "Note-Taking Template" grid now renders unconditionally.
             "section_headings": [
                 "Company Overview",
                 "Recent Developments",
+                "Note-Taking Template",
             ],
-            "n_tables": 0,
+            "n_tables": 1,
             "role_focus": "",
         },
     ),
@@ -73,6 +82,10 @@ _CASES = {
             # attendees) now, not a fabricated "Dr. Sarah Chen" persona;
             # with no organizer/attendees on the test event it degrades to
             # "—", and the discussion guide is industry-generic.
+            # "Hypothesis Tracker" / "Note-Taking Template" are fillable
+            # grids that render unconditionally, now that they're
+            # "data"-source sections instead of the dead "static" ones
+            # that never rendered.
             "section_headings": [
                 "Meeting Context",
                 "Pre-Call Research Notes",
@@ -80,8 +93,10 @@ _CASES = {
                 "Competitive Dynamics",
                 "Commercial Outlook",
                 "Regulatory & Policy Environment",
+                "Hypothesis Tracker",
+                "Note-Taking Template",
             ],
-            "n_tables": 1,
+            "n_tables": 3,
             "role_focus": "",
         },
     ),
@@ -91,13 +106,18 @@ _CASES = {
             "title": "AAPL — Channel Check Preparation",
             # "Section 1" is now real: an LLM revenue-overview bullet
             # section (formerly dead nested-subsection JSON that the engine
-            # never rendered).
+            # never rendered). "Channel Finding Tracker" / "Contact Log"
+            # are fillable grids that render unconditionally, now that
+            # they're "data"-source sections instead of the dead "static"
+            # ones that never rendered.
             "section_headings": [
                 "Revenue Overview",
                 "Section 2: Key Metrics to Validate",
                 "Section 3: Standardized Questionnaire",
+                "Channel Finding Tracker",
+                "Contact Log",
             ],
-            "n_tables": 1,
+            "n_tables": 3,
             "role_focus": "",
         },
     ),
@@ -106,11 +126,13 @@ _CASES = {
         {
             "title": "WEEKLY PORTFOLIO REVIEW",
             # Rewritten builder: no providers/cik_lookup -> the watchlist
-            # loop never runs, so every section (all real-data-only now,
-            # no fabricated market_context/sector_performance/holdings)
-            # is honestly omitted.
-            "section_headings": [],
-            "n_tables": 0,
+            # loop never runs, so every data-driven section is honestly
+            # omitted. "Action Items" is a fillable grid that renders
+            # unconditionally (it doesn't depend on the watchlist), now
+            # that it's a "data"-source section instead of the dead
+            # "static" one that never rendered.
+            "section_headings": ["Action Items"],
+            "n_tables": 1,
             "role_focus": "",
         },
     ),
@@ -122,13 +144,17 @@ _CASES = {
             # tables replace the fabricated "47 names / 12 initiations"
             # coverage-universe stats; with no ops repo wired in this call
             # (providers=None) both tables are honestly omitted.
+            # "Outstanding Items" is a fillable grid that renders
+            # unconditionally, now that it's a "data"-source section
+            # instead of the dead "static" one that never rendered.
             "section_headings": [
                 "Executive Summary",
                 "Performance Review",
                 "Key Questions",
                 "Risk Factors to Monitor",
+                "Outstanding Items",
             ],
-            "n_tables": 0,
+            "n_tables": 1,
             "role_focus": "",
         },
     ),
@@ -138,13 +164,17 @@ _CASES = {
             "title": "ANALYST MEETING BRIEFING",
             # analyst_profile/quoted_view (fabricated "Morgan Stanley"
             # persona) are deleted; debate_points is now an LLM section
-            # (empty fallback -> omitted with no LLM wired).
+            # (empty fallback -> omitted with no LLM wired). "Note-Taking
+            # Template" is a fillable grid that renders unconditionally,
+            # now that it's a "data"-source section instead of the dead
+            # "static" one that never rendered.
             "section_headings": [
                 "Executive Summary",
                 "Key Questions to Probe",
                 "Risk Factors to Monitor",
+                "Note-Taking Template",
             ],
-            "n_tables": 0,
+            "n_tables": 1,
             "role_focus": "",
         },
     ),
@@ -333,6 +363,10 @@ def test_earnings_call_full_shape():
         "Last Quarter Performance (Q2 FY2026)",
         "5-Quarter Trend",
         "Cash Flow & Capital Returns",
+        # New analyst-synthesis section: grounded in the real 5-quarter
+        # trend data from the stub, so NoOpEnricher's data-driven fallback
+        # (no LLM wired in this test) produces non-empty bullets.
+        "What Changed This Quarter",
         "Balance Sheet & Liquidity",
         "Revenue Segmentation",
         "By Geography",
@@ -349,12 +383,14 @@ def test_management_meeting_full_shape():
         "Company Overview",
         "Last Quarter (Q2 FY2026)",
         "5-Quarter Trend",
+        "What Changed This Quarter",
         "Recent Developments",
         "Guidance & Management Commentary",
         "Sentiment",
+        "Follow-Up Template",
         "Financial Summary",
     ]
-    assert len(a.tables) == 6
+    assert len(a.tables) == 7
     assert a.role_focus == "CFO"
 
 
@@ -372,8 +408,10 @@ def test_channel_check_full_shape():
         "Section 2: Key Metrics to Validate",
         "Sentiment",
         "Section 3: Standardized Questionnaire",
+        "Channel Finding Tracker",
+        "Contact Log",
     ]
-    assert len(a.tables) == 7
+    assert len(a.tables) == 9
 
 
 def test_analyst_meeting_full_shape():
@@ -388,8 +426,9 @@ def test_analyst_meeting_full_shape():
         "Key Questions to Probe",
         "Risk Factors to Monitor",
         "Sentiment",
+        "Note-Taking Template",
     ]
-    assert len(a.tables) == 4
+    assert len(a.tables) == 5
     # No fabricated "Morgan Stanley" analyst-firm persona — the firm is
     # derived from the attendee's email domain.
     assert a.tables[0]["rows"][:2] == [["Counterpart", "John Smith"], ["Firm", "Wellsfargo"]]
@@ -408,8 +447,10 @@ def test_kol_meeting_full_shape():
         "Competitive Dynamics",
         "Commercial Outlook",
         "Regulatory & Policy Environment",
+        "Hypothesis Tracker",
+        "Note-Taking Template",
     ]
-    assert len(a.tables) == 2
+    assert len(a.tables) == 4
     assert a.tables[0]["rows"][0] == ["Expert", "Dr. Jane Doe"]
 
 
@@ -419,8 +460,9 @@ def test_portfolio_meeting_full_shape(watchlist_env):
         "Watchlist Snapshot",
         "Sentiment Overview",
         "Upcoming Catalysts",
+        "Action Items",
     ]
-    assert len(a.tables) == 3
+    assert len(a.tables) == 4
 
 
 def test_internal_review_full_shape(watchlist_env):
@@ -432,5 +474,71 @@ def test_internal_review_full_shape(watchlist_env):
         "Performance Review",
         "Key Questions",
         "Risk Factors to Monitor",
+        "Outstanding Items",
     ]
-    assert len(a.tables) == 2
+    assert len(a.tables) == 3
+
+
+# ---------------------------------------------------------------------------
+# Part B5 — narrative_docs_table snippet_source provenance footnote.
+# ---------------------------------------------------------------------------
+def test_narrative_docs_table_snippet_source_provenance():
+    from calorch.analysis import narrative_docs_table
+
+    base_hit = {"date": "2026-05-01", "type": "8-K", "snippet": "Guidance raised."}
+    llm_hits = [{**base_hit, "snippet_source": "llm"}]
+    heuristic_hits = [{**base_hit, "snippet_source": "heuristic"}]
+    mixed_hits = [{**base_hit, "snippet_source": "llm"}, {**base_hit, "snippet_source": "heuristic"}]
+    untagged_hits = [dict(base_hit)]
+
+    assert narrative_docs_table(llm_hits)["source_note"] == (
+        "Source: SEC 8-K press release / MD&A (excerpts LLM-selected)"
+    )
+    assert narrative_docs_table(heuristic_hits)["source_note"] == (
+        "Source: SEC 8-K press release / MD&A (keyword-selected)"
+    )
+    assert narrative_docs_table(mixed_hits)["source_note"] == (
+        "Source: SEC 8-K press release / MD&A (mixed)"
+    )
+    # No snippet_source tag on any hit (e.g. old/ad-hoc data) -> no suffix.
+    assert narrative_docs_table(untagged_hits)["source_note"] == "Source: SEC 8-K press release / MD&A"
+
+
+# ---------------------------------------------------------------------------
+# Part B6 — ticker_trends()/ticker_context() no longer double-fetch
+# fundamentals_history for builders that need both.
+# ---------------------------------------------------------------------------
+class _CountingFundamentals(_FullStubFundamentals):
+    def __init__(self):
+        self.history_calls = 0
+
+    def fundamentals_history(self, cik, ticker, *, quarters=5):
+        self.history_calls += 1
+        return super().fundamentals_history(cik, ticker, quarters=quarters)
+
+
+@pytest.mark.parametrize("event_type,subject", [
+    (EventType.EARNINGS_CALL, "AAPL Q2 FY2026 Earnings Call"),
+    (EventType.MANAGEMENT_MEETING, "1:1 with CFO of AAPL"),
+    (EventType.CONFERENCE, "Tech Conference AAPL"),
+    (EventType.ANALYST_MEETING, "Analyst meeting AAPL Morgan Stanley"),
+    (EventType.CHANNEL_CHECK, "Channel check AAPL distributor"),
+], ids=lambda v: v.value if isinstance(v, EventType) else v)
+def test_builders_fetch_fundamentals_history_once(event_type: EventType, subject: str):
+    providers = _FullStubProviders()
+    counting = _CountingFundamentals()
+    providers.fundamentals = counting
+
+    ev = CalendarEvent(
+        id=f"ev-count-{event_type.value}",
+        subject=subject,
+        start=datetime(2026, 6, 10, 10, tzinfo=UTC),
+        end=datetime(2026, 6, 10, 11, tzinfo=UTC),
+        body_preview="preview text",
+    )
+    cls = ClassificationResult(event_id=ev.id, final_label=event_type, confidence=0.8)
+    build_analysis(
+        event_type, ev, cls, _ENTERPRISE_DATA, llm_call=None,
+        providers=providers, cik_lookup=_full_cik_lookup,
+    )
+    assert counting.history_calls == 1

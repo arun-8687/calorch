@@ -43,6 +43,7 @@ def build_analyst_meeting(ev, cls, ed, llm_call, *, providers=None, cik_lookup=N
         event_date=edt["event_date"],
         event_time=edt["event_time"],
         cik=cik or "",
+        trends=trends,
     )
     name, firm = counterpart_from_event(ev)
     ctx.update({

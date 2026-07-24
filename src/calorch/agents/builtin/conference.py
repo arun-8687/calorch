@@ -57,6 +57,7 @@ def build_conference(ev, cls, ed, llm_call, *, providers=None, cik_lookup=None) 
         event_date=edt["event_date"],
         event_time=edt["event_time"],
         cik=cik or "",
+        trends=trends,
     )
     ctx.update({
         "conference_name": ev.subject,

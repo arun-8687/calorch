@@ -74,6 +74,7 @@ def build_management_meeting(ev, cls, ed, llm_call, *, providers=None, cik_looku
         event_date=edt["event_date"],
         event_time=edt["event_time"],
         cik=cik or "",
+        trends=trends,
     )
 
     rev_yoy = fm.yoy(history, "revenue")

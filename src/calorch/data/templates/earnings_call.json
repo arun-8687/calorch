@@ -49,6 +49,14 @@
       "rows_from": "cash_flow"
     },
     {
+      "id": "whats_changed",
+      "title": "What Changed This Quarter",
+      "source": "llm",
+      "llm_method": "enrich_whats_changed",
+      "fallback": [],
+      "prompt_addendum": "Identify what MATERIALLY CHANGED quarter-over-quarter and year-over-year in the 5-quarter trend and cash-flow data, and why it matters to the investment thesis. Write 3-4 bullets covering: margin inflection, FCF vs net income divergence, working-capital movement, and growth deceleration/acceleration. Each bullet must cite a specific number from the data — do not restate every row."
+    },
+    {
       "id": "return_ratios",
       "title": "Return Ratios",
       "source": "data",

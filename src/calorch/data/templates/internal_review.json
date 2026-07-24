@@ -56,7 +56,7 @@
     {
       "id": "outstanding_items",
       "title": "Outstanding Items",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Item", "Owner", "Due Date", "Status"],
       "blank_rows": 5

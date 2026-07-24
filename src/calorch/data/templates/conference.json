@@ -42,6 +42,14 @@
       "rows_from": "quarterly_trend"
     },
     {
+      "id": "whats_changed",
+      "title": "What Changed This Quarter",
+      "source": "llm",
+      "llm_method": "enrich_whats_changed",
+      "fallback": [],
+      "prompt_addendum": "Identify what MATERIALLY CHANGED quarter-over-quarter and year-over-year in the trend data, and why it matters ahead of this meeting. Write 3-4 bullets: margin inflection, FCF vs net income divergence, working-capital movement, growth deceleration/acceleration. Cite specific numbers."
+    },
+    {
       "id": "recent_developments",
       "title": "Recent Developments",
       "source": "llm",
@@ -74,7 +82,7 @@
     {
       "id": "note_template",
       "title": "Note-Taking Template",
-      "source": "static",
+      "source": "data",
       "table_type": "multi_col",
       "headers": ["Topic", "Notes", "Investment Implication"],
       "blank_rows": 7
