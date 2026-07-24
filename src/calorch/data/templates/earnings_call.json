@@ -18,7 +18,9 @@
       "title": "Executive Snapshot",
       "source": "llm",
       "llm_method": "enrich_headline",
-      "fallback": ["{primary_ticker} earnings — see data tables above."],
+      "fallback": [
+        "{primary_ticker} earnings — see data tables above."
+      ],
       "prompt_addendum": "Write a concise 3-4 bullet executive snapshot. Cover: revenue/EPS headline, guidance, key segment trends, and one notable surprise. Use numbers and percentages. Max 30 words per bullet."
     },
     {
@@ -27,12 +29,28 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "Revenue", "value": "{rev_actual_display}"},
-        {"label": "EPS (Diluted)", "value": "{eps_actual_display}"},
-        {"label": "Gross Margin", "value": "{gross_margin_display}"},
-        {"label": "Operating Margin", "value": "{operating_margin_display}"},
-        {"label": "Net Margin", "value": "{net_margin_display}"}
-      ]
+        {
+          "label": "Revenue",
+          "value": "{rev_actual_display}"
+        },
+        {
+          "label": "EPS (Diluted)",
+          "value": "{eps_actual_display}"
+        },
+        {
+          "label": "Gross Margin",
+          "value": "{gross_margin_display}"
+        },
+        {
+          "label": "Operating Margin",
+          "value": "{operating_margin_display}"
+        },
+        {
+          "label": "Net Margin",
+          "value": "{net_margin_display}"
+        }
+      ],
+      "source_note": "Source: SEC company facts (XBRL), latest reported period"
     },
     {
       "id": "quarterly_trend",
@@ -62,9 +80,16 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "ROE", "value": "{roe}"},
-        {"label": "ROA", "value": "{roa}"}
-      ]
+        {
+          "label": "ROE",
+          "value": "{roe}"
+        },
+        {
+          "label": "ROA",
+          "value": "{roa}"
+        }
+      ],
+      "source_note": "Source: SEC company facts (XBRL), latest reported period"
     },
     {
       "id": "balance_sheet",
@@ -72,13 +97,32 @@
       "source": "data",
       "table_type": "two_col",
       "rows": [
-        {"label": "Cash & Equivalents", "value": "{cash}"},
-        {"label": "Total Debt", "value": "{total_debt}"},
-        {"label": "Net Debt", "value": "{net_debt}"},
-        {"label": "Debt/Equity", "value": "{debt_equity}"},
-        {"label": "Current Ratio", "value": "{current_ratio}"},
-        {"label": "Working Capital", "value": "{working_capital}"}
-      ]
+        {
+          "label": "Cash & Equivalents",
+          "value": "{cash}"
+        },
+        {
+          "label": "Total Debt",
+          "value": "{total_debt}"
+        },
+        {
+          "label": "Net Debt",
+          "value": "{net_debt}"
+        },
+        {
+          "label": "Debt/Equity",
+          "value": "{debt_equity}"
+        },
+        {
+          "label": "Current Ratio",
+          "value": "{current_ratio}"
+        },
+        {
+          "label": "Working Capital",
+          "value": "{working_capital}"
+        }
+      ],
+      "source_note": "Source: SEC company facts (XBRL), latest reported period"
     },
     {
       "id": "product_segments",

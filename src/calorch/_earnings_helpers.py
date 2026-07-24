@@ -37,7 +37,8 @@ def _build_segment_table_pct(segments: list[dict[str, Any]] | None) -> dict[str,
         if isinstance(val, (int, float)) and total > 0:
             pct = (val / total) * 100
             rows.append([label, _fmt_b(val), f"{pct:.1f}%"])
-    return {"headers": ["Segment", "Revenue", "% of Total"], "rows": rows}
+    return {"headers": ["Segment", "Revenue", "% of Total"], "rows": rows,
+            "source_note": "Source: SEC iXBRL segment disclosure (latest 10-Q/10-K)"}
 
 
 def _build_geo_table_pct(segments: list[dict[str, Any]] | None) -> dict[str, Any] | None:
@@ -53,4 +54,5 @@ def _build_geo_table_pct(segments: list[dict[str, Any]] | None) -> dict[str, Any
         if isinstance(val, (int, float)) and total > 0:
             pct = (val / total) * 100
             rows.append([label, _fmt_b(val), f"{pct:.1f}%"])
-    return {"headers": ["Region", "Revenue", "% of Total"], "rows": rows}
+    return {"headers": ["Region", "Revenue", "% of Total"], "rows": rows,
+            "source_note": "Source: SEC iXBRL geographic disclosure (latest 10-Q/10-K)"}

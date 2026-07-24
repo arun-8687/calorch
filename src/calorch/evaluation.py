@@ -117,14 +117,23 @@ def _result(check: str, violations: list[str]) -> dict[str, Any]:
 
 
 def _check_no_bare_dash(analysis: EventAnalysis) -> dict[str, Any]:
+    """Flag rows whose value cells are ALL bare dashes (a fully-empty row that
+    slipped past the engine's suppression). A "—" alongside real values is
+    legitimate — e.g. no year-over-year figure for the oldest quarter shown in
+    a multi-column trend table — so partial-dash rows are not violations."""
     violations = []
     for ti, table in enumerate(analysis.tables):
         tlabel = _table_label(ti, table)
         for ri, row in enumerate(table.get("rows") or []):
-            for ci, cell in enumerate(row):
-                stripped = str(cell).strip()
-                if stripped in _BARE_DASH:
-                    violations.append(f"{tlabel} row[{ri}] col[{ci}] is a bare {stripped!r}")
+            # Value cells = everything past the first (label) column; a
+            # single-column row is treated as its own value.
+            value_cells = [str(c).strip() for c in (row[1:] if len(row) > 1 else row)]
+            if not value_cells:
+                continue
+            has_real = any(v and v not in _BARE_DASH for v in value_cells)
+            has_dash = any(v in _BARE_DASH for v in value_cells)
+            if has_dash and not has_real:
+                violations.append(f"{tlabel} row[{ri}] value cells are all bare dashes")
     return _result("no_bare_dash_cells", violations)
 
 
