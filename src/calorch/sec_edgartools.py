@@ -34,11 +34,28 @@ balance-sheet presentation entirely.
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("calorch.sec_edgartools")
+
+
+@contextmanager
+def _quiet_facts():
+    """Silence edgartools' per-lookup ``UserWarning``.
+
+    ``EntityFacts.get_fact()`` warns whenever a concept exists but has no
+    fact for the requested period -- an outcome this module treats as
+    ordinary (the caller falls through to the next synonym, or leaves the
+    field ``None``). Left unsuppressed it emits a multi-line warning per
+    miss per ticker, which is pure noise in Azure Functions logs.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        yield
 
 
 # key -> ordered candidate XBRL concept names (without the "us-gaap:" prefix).
@@ -304,6 +321,16 @@ def _value_at(df: Any, concept: str, period_label: str) -> Any:
         val = df.loc[concept, period_label]
     except Exception:
         return None
+    # A duplicated concept in the index (the same tag presented at more than
+    # one depth/dimension) makes `.loc` return a Series rather than a scalar.
+    # Take the first non-null entry -- the face-presentation total, which
+    # edgartools orders ahead of any dimensional breakdown.
+    if hasattr(val, "iloc") and not isinstance(val, (str, bytes)):
+        try:
+            non_null = [v for v in list(val) if v is not None and v == v]
+            val = non_null[0] if non_null else None
+        except (TypeError, ValueError):
+            return None
     if val is None:
         return None
     try:
@@ -319,7 +346,8 @@ def _period_meta(facts: Any, concept: str, period_label: str) -> tuple[str | Non
     if facts is None:
         return period_label, ""
     try:
-        fact = facts.get_fact(f"us-gaap:{concept}", period=period_label)
+        with _quiet_facts():
+            fact = facts.get_fact(f"us-gaap:{concept}", period=period_label)
     except Exception:
         fact = None
     if fact is None:
@@ -335,7 +363,8 @@ def _instant_from_facts(facts: Any, concept: str) -> tuple[Any, str | None, str]
     if facts is None:
         return None, None, ""
     try:
-        fact = facts.get_fact(f"us-gaap:{concept}")
+        with _quiet_facts():
+            fact = facts.get_fact(f"us-gaap:{concept}")
     except Exception:
         fact = None
     if fact is None:

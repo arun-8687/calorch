@@ -35,6 +35,13 @@ log = logging.getLogger("calorch.durable.ingestion")
 bp = func.Blueprint()
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_TICKERS = 500
+
+
+def _bad_request(message: str) -> func.HttpResponse:
+    return func.HttpResponse(
+        json.dumps({"error": message}), status_code=400, mimetype="application/json"
+    )
 
 
 def _new_run_id() -> str:
@@ -45,8 +52,11 @@ def run_ingestion(tickers: list[str] | None, run_id: str) -> dict[str, Any]:
     """Download + persist the universe's SEC + AlphaSense data to blob.
 
     Loops over the tickers (defaulting to ``SEC_WATCHLIST``) via
-    ``IngestionPipeline.run``. Never raises — per-ticker failures are caught
-    inside the pipeline and reported in the result.
+    ``IngestionPipeline.run``, which catches per-ticker failures so one bad
+    ticker can't abort the batch. A failure to *start* the batch at all
+    (unreadable settings, blob container unreachable) still propagates, so
+    the invocation is recorded as failed rather than silently reporting
+    success.
     """
     from calorch.config import get_settings
     from calorch.data_ingestion import IngestionPipeline
@@ -103,12 +113,20 @@ def http_ingest(req: func.HttpRequest) -> func.HttpResponse:
 
     run_id = body.get("run_id") or _new_run_id()
     if not _RUN_ID_RE.match(run_id):
-        return func.HttpResponse(
-            json.dumps({"error": "run_id must match [A-Za-z0-9_-]{1,64}"}),
-            status_code=400,
-            mimetype="application/json",
-        )
-    result = run_ingestion(body.get("tickers") or None, run_id)
+        return _bad_request("run_id must match [A-Za-z0-9_-]{1,64}")
+
+    # `tickers` must be an explicit list. A bare string would otherwise be
+    # iterated character-by-character by the pipeline ("AAPL" -> A, A, P, L),
+    # and an unbounded list would let one request fan out arbitrarily.
+    tickers = body.get("tickers")
+    if tickers is not None:
+        if not isinstance(tickers, list) or not all(isinstance(t, str) for t in tickers):
+            return _bad_request("tickers must be a list of strings")
+        tickers = [t.strip().upper() for t in tickers if t.strip()]
+        if len(tickers) > _MAX_TICKERS:
+            return _bad_request(f"tickers may not exceed {_MAX_TICKERS} entries")
+
+    result = run_ingestion(tickers or None, run_id)
     return func.HttpResponse(json.dumps(result), status_code=200, mimetype="application/json")
 
 

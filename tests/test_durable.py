@@ -8,9 +8,12 @@ Covers:
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, UTC
 from typing import Any
 from collections.abc import Callable
+
+import pytest
 
 from calorch.durable.state import (
     deserialize_state,
@@ -510,6 +513,66 @@ class TestIngestion:
         monkeypatch.setattr("calorch.data_ingestion.IngestionPipeline", lambda *a, **k: _boom())
         out = I.run_ingestion(None, "ingest-1")
         assert out["ticker_count"] == 0 and "No tickers" in out["message"]
+
+
+class TestIngestionRequestValidation:
+    """`POST /api/ingest` body validation — the pipeline iterates whatever it
+    is handed, so a bare string would silently fan out over its characters."""
+
+    @staticmethod
+    def _request(body):
+        import azure.functions as func
+
+        return func.HttpRequest(
+            method="POST", url="/api/ingest", body=json.dumps(body).encode(), headers={}
+        )
+
+    def test_string_tickers_rejected(self, monkeypatch):
+        from calorch.durable import ingestion as I
+
+        monkeypatch.setattr(
+            "calorch.data_ingestion.IngestionPipeline",
+            lambda *a, **k: pytest.fail("pipeline must not run on invalid input"),
+        )
+        resp = I.http_ingest(self._request({"tickers": "AAPL"}))
+        assert resp.status_code == 400
+        assert "list of strings" in json.loads(resp.get_body())["error"]
+
+    def test_non_string_entries_rejected(self, monkeypatch):
+        from calorch.durable import ingestion as I
+
+        monkeypatch.setattr(
+            "calorch.data_ingestion.IngestionPipeline",
+            lambda *a, **k: pytest.fail("pipeline must not run on invalid input"),
+        )
+        resp = I.http_ingest(self._request({"tickers": ["AAPL", 7]}))
+        assert resp.status_code == 400
+
+    def test_oversized_list_rejected(self, monkeypatch):
+        from calorch.durable import ingestion as I
+
+        monkeypatch.setattr(
+            "calorch.data_ingestion.IngestionPipeline",
+            lambda *a, **k: pytest.fail("pipeline must not run on invalid input"),
+        )
+        resp = I.http_ingest(self._request({"tickers": [f"T{i}" for i in range(I._MAX_TICKERS + 1)]}))
+        assert resp.status_code == 400
+        assert "may not exceed" in json.loads(resp.get_body())["error"]
+
+    def test_valid_list_normalized_and_run(self, monkeypatch):
+        from calorch.durable import ingestion as I
+
+        captured: dict[str, Any] = {}
+
+        class FakePipeline:
+            def run(self, tickers):
+                captured["tickers"] = tickers
+                return {"tickers": {t: {} for t in tickers}}
+
+        monkeypatch.setattr("calorch.data_ingestion.IngestionPipeline", FakePipeline)
+        resp = I.http_ingest(self._request({"tickers": [" aapl ", "msft", "  "]}))
+        assert resp.status_code == 200
+        assert captured["tickers"] == ["AAPL", "MSFT"]
 
 
 class TestIngestionRegistration:

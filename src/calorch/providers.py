@@ -343,9 +343,6 @@ def _build_live_providers(settings: Any) -> ProviderBundle:
         getattr(settings, "sentiment_backend", "auto"), alphasense_configured=alphasense is not None,
         fallback="lexicon",
     )
-    sources.append({"source_name": "narrative", "status": "active", "detail": f"backend={narrative_backend}"})
-    sources.append({"source_name": "sentiment", "status": "active", "detail": f"backend={sentiment_backend}"})
-
     sec_narrative_client = None
     if narrative_backend == "sec" or sentiment_backend == "lexicon":
         try:
@@ -360,6 +357,19 @@ def _build_live_providers(settings: Any) -> ProviderBundle:
             log.warning("SEC narrative backend requires edgartools, which is not installed: %s", e)
             sources.append({"source_name": "SEC narrative", "status": "error",
                             "detail": f"edgartools not installed: {e}"})
+
+    # Reported *after* client construction: a slot is only "active" if the
+    # client backing it actually exists. Claiming "active" up front made the
+    # pack's Data Sources section overstate coverage whenever the chosen
+    # backend's dependency or credentials were missing.
+    def _slot_status(backend: str) -> dict[str, str]:
+        client = alphasense if backend == "alphasense" else sec_narrative_client
+        if client is not None:
+            return {"status": "active", "detail": f"backend={backend}"}
+        return {"status": "unavailable", "detail": f"backend={backend} selected but its client is unavailable"}
+
+    sources.append({"source_name": "narrative", **_slot_status(narrative_backend)})
+    sources.append({"source_name": "sentiment", **_slot_status(sentiment_backend)})
 
     narrative_provider: Any = (
         AlphaSenseNarrativeProvider(client=alphasense) if narrative_backend == "alphasense"

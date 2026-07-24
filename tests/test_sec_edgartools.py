@@ -670,3 +670,55 @@ def test_ingest_fundamentals_history_fetch_failure_still_returns_ok(
     assert "history_path" not in result
     fundamentals = blob.download_json(blob.input_container, result["path"])
     assert fundamentals["source"] == "sec-edgartools"
+
+
+# ---------------------------------------------------------------------------
+# _value_at — duplicated concept index
+# ---------------------------------------------------------------------------
+class _FakeSeries:
+    """Mimics what `df.loc[concept, col]` returns when the index has the same
+    concept more than once (pandas hands back a Series, not a scalar)."""
+
+    def __init__(self, values: list[Any]) -> None:
+        self._values = values
+        self.iloc = values
+
+    def __iter__(self) -> Any:
+        return iter(self._values)
+
+    def __eq__(self, other: Any) -> Any:  # pandas returns an elementwise Series
+        raise ValueError("The truth value of a Series is ambiguous.")
+
+    def __ne__(self, other: Any) -> Any:
+        raise ValueError("The truth value of a Series is ambiguous.")
+
+
+class _DupLoc:
+    def __init__(self, series: _FakeSeries) -> None:
+        self._series = series
+
+    def __getitem__(self, key: Any) -> Any:
+        return self._series
+
+
+class _DupFrame:
+    def __init__(self, series: _FakeSeries) -> None:
+        self.index = ["Revenues", "Revenues"]
+        self.columns = ["label", "Q2 2026"]
+        self.loc = _DupLoc(series)
+
+
+def test_value_at_duplicated_index_returns_first_non_null() -> None:
+    from calorch.sec_edgartools import _value_at
+
+    frame = _DupFrame(_FakeSeries([111.0, 42.0]))
+
+    assert _value_at(frame, "Revenues", "Q2 2026") == 111.0
+
+
+def test_value_at_duplicated_index_all_null_returns_none() -> None:
+    from calorch.sec_edgartools import _value_at
+
+    frame = _DupFrame(_FakeSeries([None, None]))
+
+    assert _value_at(frame, "Revenues", "Q2 2026") is None

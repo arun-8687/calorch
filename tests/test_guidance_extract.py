@@ -153,6 +153,24 @@ def test_majority_verbatim_reply_accepted_above_threshold() -> None:
     assert result == reply
 
 
+def test_fabricated_sentence_dropped_even_when_ratio_passes() -> None:
+    # 2 verbatim of 3 clears the 60% ratio bar, but the fabricated third
+    # sentence must not ride along into the accepted snippet.
+    fabricated = "Margins will expand by 900 basis points due to unicorn tears."
+    reply = (
+        "Revenue was $100 billion, up 10% year over year. "
+        "We expect continued strong growth in the coming fiscal 2026 quarters. "
+        f"{fabricated}"
+    )
+
+    result = llm_guidance_snippet(_SOURCE, "AAPL", lambda _p: reply)
+
+    assert result is not None
+    assert fabricated not in result
+    assert "unicorn tears" not in result
+    assert "We expect continued strong growth" in result
+
+
 # ---------------------------------------------------------------------------
 # Defensive invoke handling
 # ---------------------------------------------------------------------------

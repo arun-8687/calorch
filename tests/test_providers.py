@@ -283,6 +283,25 @@ def test_narrative_backend_sec_import_error_degrades(
     sent = bundle.sentiment.sentiment("AAPL")
     assert sent["mean_sentiment"] is None
     assert any(s["source_name"] == "SEC narrative" and s["status"] == "error" for s in bundle.sources)
+    # The slot itself must not claim "active" when no client backs it —
+    # the Data Sources section would otherwise overstate coverage.
+    narrative_slot = next(s for s in bundle.sources if s["source_name"] == "narrative")
+    sentiment_slot = next(s for s in bundle.sources if s["source_name"] == "sentiment")
+    assert narrative_slot["status"] == "unavailable"
+    assert sentiment_slot["status"] == "unavailable"
+
+
+def test_narrative_backend_alphasense_without_credentials_reported_unavailable(
+    base_settings: Settings,
+) -> None:
+    """Explicitly selecting alphasense with no credentials must not read as active."""
+    settings = dataclasses.replace(base_settings, narrative_backend="alphasense")
+
+    bundle = build_providers(settings)
+
+    narrative_slot = next(s for s in bundle.sources if s["source_name"] == "narrative")
+    assert narrative_slot["status"] == "unavailable"
+    assert "backend=alphasense" in narrative_slot["detail"]
 
 
 # ---------------------------------------------------------------------------

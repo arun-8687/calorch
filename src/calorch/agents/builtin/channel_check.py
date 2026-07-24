@@ -121,7 +121,7 @@ def build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
     )
 
     data_tables["metrics_to_validate"] = {
-        "headers": ["Metric", "Model Assumption", "Period", "Why It Matters"],
+        "headers": ["Metric", "Latest Reported", "Period", "Why It Matters"],
         "rows": [
             ["Revenue growth (YoY)", f"{rev_yoy:+.1f}%" if rev_yoy is not None else _DASH,
              last_q_label, "Primary revenue driver"],
@@ -129,7 +129,9 @@ def build_channel_check(ev, cls, ed, llm_call, *, providers=None, cik_lookup=Non
              last_q_label, "Margin trajectory signal"],
             ["Inventory days (DIO)", _days(dio), last_q_label, "Channel inventory health"],
         ],
-        "source_note": "Source: SEC company facts (XBRL), latest reported period",
+        # Mixed sourcing: growth/margin deltas come from the quarterly history,
+        # DIO from the latest company-facts snapshot.
+        "source_note": "Source: SEC company facts and quarterly filings (XBRL)",
     }
 
     ctx = ticker_context(

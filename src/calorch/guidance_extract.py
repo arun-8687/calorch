@@ -93,11 +93,17 @@ def llm_guidance_snippet(
     if not sentences:
         return None
 
-    matched = sum(1 for s in sentences if _normalize(s) in normalized_source)
-    if matched == 0 or matched / len(sentences) < _MIN_MATCH_RATIO:
+    # Two-stage guard. The ratio gate rejects replies that are mostly
+    # invention (a model that fabricated half its answer is not one to
+    # trust with the other half). Returning only `verified` then ensures a
+    # fabricated sentence can never reach the blob just because verbatim
+    # sentences outnumbered it -- e.g. 2-of-3 clears the 60% bar, but the
+    # third, hallucinated sentence is still dropped rather than emitted.
+    verified = [s for s in sentences if _normalize(s) in normalized_source]
+    if not verified or len(verified) / len(sentences) < _MIN_MATCH_RATIO:
         return None
 
-    return reply[:max_chars].strip()
+    return " ".join(verified)[:max_chars].strip()
 
 
 def resolve_extractor(settings: Settings) -> str:
