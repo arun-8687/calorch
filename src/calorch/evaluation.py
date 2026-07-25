@@ -229,7 +229,8 @@ def _render_table_lines(table: dict[str, Any]) -> list[str]:
         lines.append("| " + " | ".join(str(c) for c in row) + " |")
     note = table.get("source_note")
     if note:
-        lines.append(f"_Source: {note}_")
+        # Notes already read "Source: ..."; don't prefix a second one.
+        lines.append(f"_{note}_" if str(note).lstrip().lower().startswith("source") else f"_Source: {note}_")
     return lines
 
 

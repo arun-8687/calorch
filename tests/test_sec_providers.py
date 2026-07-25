@@ -192,3 +192,42 @@ def test_sec_edgar_client_get_uses_shared_client(tmp_path: Path, monkeypatch: py
     result = client._get("https://data.sec.gov/test")
     assert result == {"ok": True}
     assert mock_client.get.called
+
+
+# ---------------------------------------------------------------------------
+# humanize_member — XBRL member names rendered as analyst-readable labels
+# ---------------------------------------------------------------------------
+import pytest as _pytest  # noqa: E402
+
+from calorch.sec_ixbrl import humanize_member  # noqa: E402
+
+
+@_pytest.mark.parametrize(
+    ("member", "expected"),
+    [
+        # Leading-lowercase brands survive CamelCase splitting.
+        ("aapl:IPhoneMember", "iPhone"),
+        ("IPadMember", "iPad"),
+        # Plain members, namespace stripped, suffix removed.
+        ("MacMember", "Mac"),
+        ("ServiceMember", "Service"),
+        ("msft:IntelligentCloudMember", "Intelligent Cloud"),
+        ("nvda:DataCenterMember", "Data Center"),
+        # Structural suffixes stack ("...SegmentMember").
+        ("AmericasSegmentMember", "Americas"),
+        ("GreaterChinaSegmentMember", "Greater China"),
+        # Connectives XBRL embeds in lowercase, and small words kept lowercase.
+        ("RestOfAsiaPacificSegmentMember", "Rest of Asia Pacific"),
+        ("WearablesHomeandAccessoriesMember", "Wearables Home and Accessories"),
+        ("OfficeProductsAndCloudServicesMember", "Office Products and Cloud Services"),
+    ],
+)
+def test_humanize_member(member: str, expected: str) -> None:
+    assert humanize_member(member) == expected
+
+
+def test_humanize_member_degrades_to_input() -> None:
+    """Nothing left to show -> return something traceable, never blank."""
+    assert humanize_member("Member") == "Member"
+    assert humanize_member("") == ""
+    assert humanize_member("aapl:Member") == "Member"

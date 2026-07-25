@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -71,6 +72,82 @@ GEO_AXES = {
 # Heuristic: members ending with SegmentMember / CountryMember / RegionMember
 # are geographic even when the axis is StatementBusinessSegmentsAxis.
 _GEO_MEMBER_SUFFIXES = ("SegmentMember", "CountryMember", "RegionMember")
+
+# --- human labels for XBRL member names -------------------------------------
+# XBRL member names are CamelCase identifiers with a structural suffix
+# ("aapl:IPhoneMember", "us-gaap:RestOfAsiaPacificSegmentMember"). Reports
+# show these to analysts, so they get de-camelized into prose.
+_MEMBER_SUFFIXES = ("Member", "Segment", "Category", "Axis")
+# Lowercase words XBRL embeds mid-identifier, and small words that should not
+# be capitalized when they land mid-label.
+_LOWER_WORDS = frozenset({"and", "of", "the", "or", "in", "to", "for"})
+# Casings CamelCase splitting can't recover (leading-lowercase brand names and
+# acronyms). Keyed on the de-camelized word, lowercased.
+_LABEL_CASINGS: dict[str, str] = {
+    "iphone": "iPhone", "ipad": "iPad", "ipod": "iPod", "imac": "iMac",
+    "itunes": "iTunes", "icloud": "iCloud", "ios": "iOS", "ipados": "iPadOS",
+    "macos": "macOS", "tvos": "tvOS", "watchos": "watchOS", "airpods": "AirPods",
+    "ec": "EC", "us": "US", "usa": "USA", "uk": "UK", "emea": "EMEA",
+    "apac": "APAC", "latam": "LatAm", "oem": "OEM", "rd": "R&D",
+    "it": "IT", "ai": "AI", "saas": "SaaS", "gpu": "GPU", "cpu": "CPU",
+}
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_ACRONYM_BOUNDARY_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def humanize_member(member: str) -> str:
+    """Turn an XBRL member name into a human label.
+
+    ``"aapl:IPhoneMember"`` -> ``"iPhone"``;
+    ``"RestOfAsiaPacificSegmentMember"`` -> ``"Rest of Asia Pacific"``;
+    ``"WearablesHomeandAccessoriesMember"`` -> ``"Wearables, Home and Accessories"``.
+
+    Falls back to the input unchanged when there is nothing left to show, so
+    an unrecognized member is still traceable rather than blank.
+    """
+    name = _strip_ns(member or "").strip()
+    if not name:
+        return member or ""
+    # Strip structural suffixes, outermost first ("...SegmentMember").
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _MEMBER_SUFFIXES:
+            if name.endswith(suffix) and len(name) > len(suffix):
+                name = name[: -len(suffix)]
+                changed = True
+    if not name:
+        return _strip_ns(member)
+    # XBRL embeds connectives in lowercase mid-identifier
+    # ("WearablesHomeandAccessories"); make them their own word first.
+    for word in _LOWER_WORDS:
+        name = re.sub(rf"(?<=[a-z])({word})(?=[A-Z])", r" \1 ", name)
+    name = _ACRONYM_BOUNDARY_RE.sub(" ", _CAMEL_BOUNDARY_RE.sub(" ", name))
+    words = [w for w in name.split() if w]
+    if not words:
+        return _strip_ns(member)
+    # CamelCase splitting breaks leading-lowercase brands ("IPhone" -> "I
+    # Phone"). Re-merge adjacent words whose concatenation is a known casing.
+    merged: list[str] = []
+    i = 0
+    while i < len(words):
+        if i + 1 < len(words) and (words[i] + words[i + 1]).lower() in _LABEL_CASINGS:
+            merged.append(words[i] + words[i + 1])
+            i += 2
+        else:
+            merged.append(words[i])
+            i += 1
+    words = merged
+    out: list[str] = []
+    for i, word in enumerate(words):
+        key = word.lower()
+        if key in _LABEL_CASINGS:
+            out.append(_LABEL_CASINGS[key])
+        elif i > 0 and key in _LOWER_WORDS:
+            out.append(key)
+        else:
+            out.append(word)
+    return " ".join(out)
 
 
 @dataclass(frozen=True)
@@ -315,7 +392,7 @@ class SecIxbrlClient:
             results.append(SegmentFact(
                 concept=f"us-gaap:{concept}",
                 segment_member=member,
-                segment_label=member,  # caller can map ticker→prefix
+                segment_label=humanize_member(member),
                 period_start=period["start"],
                 period_end=period["end"],
                 value=value,
